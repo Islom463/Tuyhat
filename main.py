@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 TAKLIFNOMA BOT — AI video taklifnoma, tarjima va grammatika tekshiruvi (Telegram, aiogram 3).
-
+ 
 Render'da Start Command: python main.py
-
+ 
 Muhit o'zgaruvchilari (Render → Environment):
   BOT_TOKEN        - BotFather tokeni (majburiy)
   ADMIN_ID         - admin Telegram ID (bir nechta bo'lsa vergul bilan). To'lov cheklari va zaxira shu yerga keladi
   GROQ_API_KEY     - console.groq.com dan olingan kalit (gsk_...). AI shu bilan ishlaydi
-  PRICE            - ixtiyoriy: obuna narxi, standart 500000
+  PRICE_SINGLE     - ixtiyoriy: 1 ta taklifnoma narxi, standart 150000
+  PRICE_UNLIMITED  - ixtiyoriy: cheksiz tarif narxi, standart 500000 (eski PRICE nomi ham ishlaydi)
+  REGEN_LIMIT      - ixtiyoriy: 1 ta taklifnoma ichida «boshqa dizayn/musiqa» necha marta, standart 5
   ACCESS_DAYS      - ixtiyoriy: obuna muddati (kun). 0 = muddatsiz (standart)
   FREE_DAILY       - ixtiyoriy: to'lamagan foydalanuvchiga kuniga nechta bepul tarjima/tekshiruv (standart 8, 0 = o'chiq)
   CARD_NUMBER / CARD_OWNER / ADMIN_CONTACT - ixtiyoriy: karta raqami, egasi va admin username
@@ -33,7 +35,7 @@ import time
 import urllib.request
 from contextlib import closing
 from datetime import datetime, timezone
-
+ 
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
@@ -45,30 +47,32 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (BufferedInputFile, ErrorEvent, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup,
                            InputMediaDocument, KeyboardButton, ReplyKeyboardMarkup)
-
+ 
 import studio
 from texts import LANG_NAMES, LANGS, PALETTE_LABELS, S, TR_LANGS, to_cyrillic, to_latin
 from texts import tr as _tr
-
+ 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BOT_STATUS = {"text": "Bot ishga tushmoqda..."}
-
+ 
 # ============================================================================================
 # Sozlamalar
 # ============================================================================================
 DB_PATH = os.getenv("DB_PATH", "taklifnoma.db")
 os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
-
-
+ 
+ 
 def _int_env(name, default):
     try:
         return int(re.sub(r"[^\d]", "", os.getenv(name, "")) or default)
     except ValueError:
         return default
-
-
+ 
+ 
 ADMIN_IDS = {int(x) for x in re.findall(r"\d+", os.getenv("ADMIN_ID", "") + " " + os.getenv("ADMIN_IDS", ""))}
-PRICE = _int_env("PRICE", 500000)
+PRICE_SINGLE = _int_env("PRICE_SINGLE", 150000)
+PRICE_UNLIMITED = _int_env("PRICE_UNLIMITED", _int_env("PRICE", 500000))
+REGEN_LIMIT = _int_env("REGEN_LIMIT", 5)
 ACCESS_DAYS = _int_env("ACCESS_DAYS", 0)
 FREE_DAILY = _int_env("FREE_DAILY", 8)
 CARD_NUMBER = os.getenv("CARD_NUMBER", "5614 6818 7058 8666").strip()
@@ -79,8 +83,8 @@ try:
 except ValueError:
     BACKUP_MINUTES = 30.0
 LIFETIME = 4102444800  # 2100-01-01 — "muddatsiz" belgisi
-
-
+ 
+ 
 def detect_token():
     tok_re = r"\d{6,}:[A-Za-z0-9_-]{30,}"
     env = {k: (v or "").strip().strip('"').strip("'") for k, v in os.environ.items()}
@@ -93,8 +97,8 @@ def detect_token():
         if m:
             return m.group(0)
     return ""
-
-
+ 
+ 
 def detect_groq_key():
     env = {k: (v or "").strip().strip('"').strip("'") for k, v in os.environ.items()}
     for k in ("GROQ_API_KEY", "GROQ_KEY", "GROQ_TOKEN", "GROQ"):
@@ -111,39 +115,39 @@ def detect_groq_key():
         if m:
             return m.group(0)
     return ""
-
-
+ 
+ 
 TOKEN = detect_token()
 if not TOKEN:
     while True:
         logging.error("BOT_TOKEN topilmadi! Render Environment'ga BOT_TOKEN ni kiriting.")
         time.sleep(30)
 GROQ_KEY = detect_groq_key()
-
+ 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-
+ 
 _BG_TASKS = set()
-
-
+ 
+ 
 def run_bg(coro):
     t = asyncio.create_task(coro)
     _BG_TASKS.add(t)
     t.add_done_callback(_BG_TASKS.discard)
     return t
-
-
+ 
+ 
 def esc(s):
     return html.escape(str(s), quote=False)
-
-
+ 
+ 
 # ============================================================================================
 # Render uchun veb-server va keep-alive
 # ============================================================================================
 async def _root_handler(request):
     return web.Response(text=BOT_STATUS["text"])
-
-
+ 
+ 
 async def start_web_server():
     app = web.Application()
     app.add_routes([web.get("/", _root_handler), web.get("/ping", _root_handler)])
@@ -151,8 +155,8 @@ async def start_web_server():
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080))).start()
     logging.info("Veb-server ishga tushdi (port %s)", os.getenv("PORT", 8080))
-
-
+ 
+ 
 def self_ping():
     while True:
         time.sleep(240)
@@ -161,8 +165,8 @@ def self_ping():
             urllib.request.urlopen(url, timeout=20).read()
         except Exception:
             pass
-
-
+ 
+ 
 class _StatusLogHandler(logging.Handler):
     def emit(self, record):
         try:
@@ -175,11 +179,11 @@ class _StatusLogHandler(logging.Handler):
                                   "Eski xizmat yoki nusxani to'xtating.")
         elif "TelegramUnauthorizedError" in msg:
             BOT_STATUS["text"] = f"XATO (Unauthorized, {stamp} UTC): Telegram tokenni qabul qilmadi."
-
-
+ 
+ 
 logging.getLogger("aiogram").addHandler(_StatusLogHandler())
-
-
+ 
+ 
 async def wait_for_valid_token():
     while True:
         try:
@@ -194,15 +198,15 @@ async def wait_for_valid_token():
             BOT_STATUS["text"] = f"Telegramga ulanib bo'lmadi ({type(ex).__name__}). Qayta urinilmoqda..."
             logging.error("%s: %s", BOT_STATUS["text"], ex)
         await asyncio.sleep(60)
-
-
+ 
+ 
 # ============================================================================================
 # Baza
 # ============================================================================================
 def db():
     return closing(sqlite3.connect(DB_PATH, timeout=30))
-
-
+ 
+ 
 def init_db():
     with db() as c:
         c.executescript("""
@@ -214,19 +218,24 @@ def init_db():
         CREATE TABLE IF NOT EXISTS music (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT, title TEXT, added INTEGER);
         CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, created INTEGER, lang TEXT);
         """)
+        # eski bazalarni yangilash (tariflar): users.credits, payments.plan
+        if "credits" not in {r[1] for r in c.execute("PRAGMA table_info(users)")}:
+            c.execute("ALTER TABLE users ADD COLUMN credits INTEGER DEFAULT 0")
+        if "plan" not in {r[1] for r in c.execute("PRAGMA table_info(payments)")}:
+            c.execute("ALTER TABLE payments ADD COLUMN plan TEXT DEFAULT 'unlimited'")
         c.commit()
-
-
+ 
+ 
 init_db()
-
-
+ 
+ 
 def is_admin(uid):
     return uid in ADMIN_IDS
-
-
+ 
+ 
 _LANG = {}
-
-
+ 
+ 
 def get_lang(uid):
     if uid in _LANG:
         return _LANG[uid]
@@ -236,15 +245,15 @@ def get_lang(uid):
     if lang:
         _LANG[uid] = lang
     return lang
-
-
+ 
+ 
 def set_lang(uid, lang):
     with db() as c:
         c.execute("UPDATE users SET lang = ? WHERE user_id = ?", (lang, uid))
         c.commit()
     _LANG[uid] = lang
-
-
+ 
+ 
 def upsert_user(u):
     name = (u.full_name or u.first_name or "")[:80]
     with db() as c:
@@ -252,18 +261,18 @@ def upsert_user(u):
                   (u.id, name, u.username or "", int(time.time())))
         c.execute("UPDATE users SET name = ?, username = ? WHERE user_id = ?", (name, u.username or "", u.id))
         c.commit()
-
-
+ 
+ 
 def paid_until(uid):
     with db() as c:
         row = c.execute("SELECT paid_until FROM users WHERE user_id = ?", (uid,)).fetchone()
     return int(row[0] or 0) if row else 0
-
-
+ 
+ 
 def has_access(uid):
     return is_admin(uid) or paid_until(uid) > time.time()
-
-
+ 
+ 
 def grant_access(uid, days=None):
     days = ACCESS_DAYS if days is None else days
     now = int(time.time())
@@ -277,36 +286,61 @@ def grant_access(uid, days=None):
         c.execute("UPDATE users SET paid_until = ? WHERE user_id = ?", (new, uid))
         c.commit()
     return new
-
-
+ 
+ 
 def revoke_access(uid):
     with db() as c:
         c.execute("UPDATE users SET paid_until = 0 WHERE user_id = ?", (uid,))
         c.commit()
-
-
+ 
+ 
+def get_credits(uid):
+    with db() as c:
+        row = c.execute("SELECT credits FROM users WHERE user_id = ?", (uid,)).fetchone()
+    return int(row[0] or 0) if row else 0
+ 
+ 
+def add_credits(uid, n=1):
+    with db() as c:
+        c.execute("INSERT OR IGNORE INTO users (user_id, name, username, joined) VALUES (?, '', '', ?)", (uid, int(time.time())))
+        c.execute("UPDATE users SET credits = MAX(0, COALESCE(credits, 0) + ?) WHERE user_id = ?", (n, uid))
+        c.commit()
+ 
+ 
+def use_credit(uid):
+    """1 ta taklifnoma kreditini yechadi. Kredit bo'lmasa False."""
+    with db() as c:
+        cur = c.execute("UPDATE users SET credits = credits - 1 WHERE user_id = ? AND COALESCE(credits, 0) > 0", (uid,))
+        c.commit()
+        return cur.rowcount > 0
+ 
+ 
+def can_create(uid):
+    return has_access(uid) or get_credits(uid) > 0
+ 
+ 
 def until_text(uid):
     p = paid_until(uid)
     if is_admin(uid) or p >= LIFETIME:
         return T(uid, "sub_life")
     return datetime.fromtimestamp(p, timezone.utc).strftime("%d.%m.%Y")
-
-
+ 
+ 
 # kunlik bepul limit (tarjima / xato tekshirish)
 def _today():
     return time.strftime("%Y-%m-%d", time.gmtime())
-
-
+ 
+ 
 def quota_used(uid):
     with db() as c:
         row = c.execute("SELECT cnt FROM usage WHERE user_id = ? AND day = ?", (uid, _today())).fetchone()
     return int(row[0]) if row else 0
-
-
+ 
+ 
 def quota_ok(uid):
     return has_access(uid) or quota_used(uid) < FREE_DAILY
-
-
+ 
+ 
 def quota_use(uid):
     if has_access(uid):
         return
@@ -314,33 +348,33 @@ def quota_use(uid):
         c.execute("INSERT INTO usage (user_id, day, cnt) VALUES (?, ?, 1) "
                   "ON CONFLICT(user_id, day) DO UPDATE SET cnt = cnt + 1", (uid, _today()))
         c.commit()
-
-
+ 
+ 
 # ============================================================================================
 # Matn yordamchilari va klaviaturalar
 # ============================================================================================
 def T(uid, key, /, **kw):
     return _tr(get_lang(uid) or "uz", key, **kw)
-
-
+ 
+ 
 def btn(text, data=None, url=None):
     return InlineKeyboardButton(text=text, callback_data=data) if data else InlineKeyboardButton(text=text, url=url)
-
-
+ 
+ 
 def ikb(rows):
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
+ 
+ 
 def money(n):
     return f"{n:,}".replace(",", " ")
-
-
+ 
+ 
 LABEL2ACT = {}
 for _lang in LANGS:
     for _act in ("invite", "tr", "gr", "pay", "lang", "help"):
         LABEL2ACT[S[_lang]["m_" + _act]] = _act
-
-
+ 
+ 
 def menu_kb(lang):
     t = lambda k: S[lang]["m_" + k]
     return ReplyKeyboardMarkup(keyboard=[
@@ -348,16 +382,16 @@ def menu_kb(lang):
         [KeyboardButton(text=t("tr")), KeyboardButton(text=t("gr"))],
         [KeyboardButton(text=t("pay")), KeyboardButton(text=t("lang")), KeyboardButton(text=t("help"))],
     ], resize_keyboard=True)
-
-
+ 
+ 
 def lang_kb():
     return ikb([[btn(LANG_NAMES["uz"], "lang:uz"), btn(LANG_NAMES["uz_cyrl"], "lang:uz_cyrl")],
                 [btn(LANG_NAMES["ru"], "lang:ru"), btn(LANG_NAMES["en"], "lang:en")]])
-
-
+ 
+ 
 LANG_PICK_TEXT = "🌍 Tilni tanlang · Тилни танланг · Выберите язык · Choose language"
-
-
+ 
+ 
 async def send_long(chat_id, text, **kw):
     """Telegram 4096 belgi limiti uchun bo'lib yuboradi."""
     parts, cur = [], ""
@@ -372,34 +406,35 @@ async def send_long(chat_id, text, **kw):
     for i, p in enumerate(parts or [text]):
         msg = await bot.send_message(chat_id, p.rstrip("\n"), **(kw if i == len(parts) - 1 else {}))
     return msg
-
-
+ 
+ 
 def pay_info_text(uid):
     period = T(uid, "period_life") if ACCESS_DAYS <= 0 else T(uid, "period_days", d=ACCESS_DAYS)
-    return T(uid, "pay_info", price=money(PRICE), period=period, card=esc(CARD_NUMBER), owner=esc(CARD_OWNER),
-             admin=esc(ADMIN_CONTACT))
-
-
+    return T(uid, "pay_info", price1=money(PRICE_SINGLE), price2=money(PRICE_UNLIMITED), period=period,
+             regen=REGEN_LIMIT, card=esc(CARD_NUMBER), owner=esc(CARD_OWNER), admin=esc(ADMIN_CONTACT))
+ 
+ 
 def admin_url():
     return "https://t.me/" + ADMIN_CONTACT.lstrip("@")
-
-
+ 
+ 
 def pay_kb(uid):
-    return ikb([[btn(T(uid, "pay_send"), "pay:send")],
+    return ikb([[btn(T(uid, "pay_btn_single", price=money(PRICE_SINGLE)), "pay:send:single")],
+                [btn(T(uid, "pay_btn_unlimited", price=money(PRICE_UNLIMITED)), "pay:send:unlimited")],
                 [btn(T(uid, "pay_demo"), "pay:demo")],
                 [btn(T(uid, "pay_admin"), url=admin_url())]])
-
-
+ 
+ 
 # ============================================================================================
 # Groq AI (tez va "qotib qolmaydigan": qisqa timeout, zaxira modellar, umumiy muddat)
 # ============================================================================================
 class AIError(Exception):
     pass
-
-
+ 
+ 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-
+ 
+ 
 def _models(*names):
     out = []
     for n in names:
@@ -407,35 +442,35 @@ def _models(*names):
         if n and n not in out:
             out.append(n)
     return out
-
-
+ 
+ 
 TEXT_MODELS = _models(os.getenv("GROQ_MODEL", ""), "openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b")
 VISION_MODELS = _models(os.getenv("GROQ_VISION_MODEL", ""), "qwen/qwen3.6-27b", "qwen/qwen3.8-27b",
                         "meta-llama/llama-4-scout-17b-16e-instruct")
 _http = None
 _ai_sem = None
-
-
+ 
+ 
 async def http():
     global _http
     if _http is None or _http.closed:
         _http = aiohttp.ClientSession()
     return _http
-
-
+ 
+ 
 def _extras(model):
     if model.startswith("openai/gpt-oss"):
         return {"reasoning_effort": "low"}
     if model.startswith("qwen/qwen3"):
         return {"reasoning_effort": "none"}
     return {}
-
-
+ 
+ 
 def _clean_ai(text):
     text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S)
     return text.strip()
-
-
+ 
+ 
 async def groq_chat(messages, models=None, max_tokens=1500, temperature=0.3, deadline=50):
     """Modellarni ketma-ket sinaydi. Har bir urinish ≤25 s, umumiy ≤ deadline s — bot hech qachon osilib qolmaydi."""
     if not GROQ_KEY:
@@ -488,8 +523,8 @@ async def groq_chat(messages, models=None, max_tokens=1500, temperature=0.3, dea
                     logging.warning("Groq %s", last)
                     break
     raise AIError(last)
-
-
+ 
+ 
 def parse_json(text):
     text = re.sub(r"```(?:json)?", "", text or "").strip()
     i, j = text.find("{"), text.rfind("}")
@@ -499,8 +534,8 @@ def parse_json(text):
         return json.loads(text[i:j + 1])
     except Exception:
         return None
-
-
+ 
+ 
 LANG_DESC = {k: v[1] for k, v in TR_LANGS.items()}
 DEFAULT_TEXT = {
     "uz": "Sizni farzandlarimizning nikoh to'yiga taklif etamiz",
@@ -508,8 +543,8 @@ DEFAULT_TEXT = {
     "ru": "Приглашаем вас на свадьбу наших детей",
     "en": "We joyfully invite you to celebrate the wedding of our children",
 }
-
-
+ 
+ 
 async def ai_invite_text(names, lang):
     target = LANG_DESC["uz" if lang == "uz_cyrl" else lang]
     msgs = [{"role": "system", "content": "You write short, elegant, warm wedding invitation texts."},
@@ -522,8 +557,8 @@ async def ai_invite_text(names, lang):
     out = out.strip().strip('"«»“”').strip()
     out = re.sub(r"\s+", " ", out)[:220]
     return to_cyrillic(out) if lang == "uz_cyrl" else out
-
-
+ 
+ 
 async def ai_design(desc):
     msgs = [{"role": "system", "content": "You are a luxury wedding invitation art director. Reply with JSON only."},
             {"role": "user", "content": (
@@ -546,8 +581,8 @@ async def ai_design(desc):
         pal["text"] = None
     style = data.get("style") if data.get("style") in studio.STYLES else None
     return pal, style
-
-
+ 
+ 
 async def ai_translate(text, target):
     msgs = [{"role": "system", "content": (
         "You are a professional translator. First silently fix obvious spelling and grammar mistakes in the source, "
@@ -556,8 +591,8 @@ async def ai_translate(text, target):
         {"role": "user", "content": f"Translate into {LANG_DESC[target]}:\n\n{text}"}]
     out = await groq_chat(msgs, max_tokens=2000, temperature=0.2)
     return out
-
-
+ 
+ 
 async def ai_grammar(text, ui_lang):
     expl = LANG_DESC["uz" if ui_lang == "uz_cyrl" else ui_lang]
     msgs = [{"role": "system", "content": (
@@ -575,14 +610,14 @@ async def ai_grammar(text, ui_lang):
         return {"corrected": out.strip(), "errors": []}
     errs = [e for e in (data.get("errors") or []) if isinstance(e, dict) and e.get("wrong") and e.get("right")]
     return {"corrected": str(data["corrected"]).strip(), "errors": errs}
-
-
+ 
+ 
 def _vision_msg(prompt, b64):
     return [{"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}}]}]
-
-
+ 
+ 
 async def ai_vision_translate(b64, target):
     prompt = ("Read ALL text visible in this image exactly as written (OCR), keeping line breaks. "
               f"Then translate it into {LANG_DESC[target]} (silently fixing obvious mistakes). "
@@ -593,8 +628,8 @@ async def ai_vision_translate(b64, target):
     if not data:
         return {"original": "", "translation": out.strip()}
     return {"original": str(data.get("original") or "").strip(), "translation": str(data.get("translation") or "").strip()}
-
-
+ 
+ 
 async def ai_vision_grammar(b64, ui_lang):
     expl = LANG_DESC["uz" if ui_lang == "uz_cyrl" else ui_lang]
     prompt = ("Read ALL text visible in this image exactly as written (OCR). Then find spelling, grammar and punctuation "
@@ -609,8 +644,8 @@ async def ai_vision_grammar(b64, ui_lang):
     errs = [e for e in (data.get("errors") or []) if isinstance(e, dict) and e.get("wrong") and e.get("right")]
     return {"original": str(data.get("original") or "").strip(), "corrected": str(data.get("corrected") or "").strip(),
             "errors": errs}
-
-
+ 
+ 
 def prepare_image_b64(raw):
     from PIL import Image, ImageOps
     im = Image.open(io.BytesIO(raw))
@@ -624,8 +659,8 @@ def prepare_image_b64(raw):
         if len(data) < 2_800_000:
             break
     return base64.b64encode(data).decode()
-
-
+ 
+ 
 async def get_image_b64(message):
     f = None
     if message.photo:
@@ -637,8 +672,8 @@ async def get_image_b64(message):
     buf = io.BytesIO()
     await bot.download(f, destination=buf)
     return await asyncio.to_thread(prepare_image_b64, buf.getvalue())
-
-
+ 
+ 
 # ============================================================================================
 # Holatlar (FSM)
 # ============================================================================================
@@ -654,31 +689,31 @@ class Inv(StatesGroup):
     palette = State()
     music = State()
     musicfile = State()
-
-
+ 
+ 
 class Pay(StatesGroup):
     receipt = State()
-
-
+ 
+ 
 class Tr(StatesGroup):
     wait = State()
-
-
+ 
+ 
 class Gr(StatesGroup):
     wait = State()
-
-
+ 
+ 
 class AdmMusic(StatesGroup):
     add = State()
-
-
+ 
+ 
 # ============================================================================================
 # /start, til, menyu
 # ============================================================================================
 async def send_welcome(chat_id, uid, name):
     await bot.send_message(chat_id, T(uid, "welcome", name=esc(name or "")), reply_markup=menu_kb(get_lang(uid) or "uz"))
-
-
+ 
+ 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -687,8 +722,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
     if not get_lang(uid):
         return await message.answer(LANG_PICK_TEXT, reply_markup=lang_kb())
     await send_welcome(message.chat.id, uid, message.from_user.first_name)
-
-
+ 
+ 
 @dp.callback_query(F.data.startswith("lang:"))
 async def cb_lang(callback: types.CallbackQuery, state: FSMContext):
     lang = callback.data.split(":")[1]
@@ -709,15 +744,15 @@ async def cb_lang(callback: types.CallbackQuery, state: FSMContext):
     else:
         await bot.send_message(callback.message.chat.id, T(uid, "lang_changed"), reply_markup=menu_kb(lang))
     run_bg(safe_push_backup())
-
-
+ 
+ 
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
     await message.answer(T(uid, "cancelled"), reply_markup=menu_kb(get_lang(uid) or "uz"))
-
-
+ 
+ 
 @dp.message(F.text.in_(set(LABEL2ACT)))
 async def on_menu(message: types.Message, state: FSMContext):
     await state.clear()
@@ -739,35 +774,48 @@ async def on_menu(message: types.Message, state: FSMContext):
     elif act == "gr":
         await state.set_state(Gr.wait)
         await message.answer(T(uid, "gr_ready"))
-
-
+ 
+ 
 # ============================================================================================
 # To'lov va obuna
 # ============================================================================================
 async def show_subscription(chat_id, uid):
+    lines = []
     if has_access(uid):
-        await bot.send_message(chat_id, T(uid, "sub_active", until=until_text(uid)))
-    else:
-        await bot.send_message(chat_id, T(uid, "sub_none") + "\n\n" + pay_info_text(uid), reply_markup=pay_kb(uid))
-
-
+        lines.append(T(uid, "sub_active", until=until_text(uid)))
+    credits = get_credits(uid)
+    if credits:
+        lines.append(T(uid, "sub_credits", n=credits))
+    if has_access(uid):
+        return await bot.send_message(chat_id, "\n".join(lines))
+    head = "\n".join(lines) if lines else T(uid, "sub_none")
+    await bot.send_message(chat_id, head + "\n\n" + pay_info_text(uid), reply_markup=pay_kb(uid))
+ 
+ 
 def pending_payment(uid):
     with db() as c:
         return c.execute("SELECT id FROM payments WHERE user_id = ? AND status = 'pending'", (uid,)).fetchone()
-
-
-@dp.callback_query(F.data == "pay:send")
+ 
+ 
+def plan_price(plan):
+    return PRICE_SINGLE if plan == "single" else PRICE_UNLIMITED
+ 
+ 
+@dp.callback_query(F.data.startswith("pay:send"))
 async def cb_pay_send(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
+    parts = callback.data.split(":")
+    plan = parts[2] if len(parts) > 2 and parts[2] in ("single", "unlimited") else "unlimited"
     await callback.answer()
-    if has_access(uid):
+    if plan == "unlimited" and has_access(uid):
         return await callback.message.answer(T(uid, "sub_active", until=until_text(uid)))
     if pending_payment(uid):
         return await callback.message.answer(T(uid, "pay_pending", admin=esc(ADMIN_CONTACT)))
     await state.set_state(Pay.receipt)
-    await callback.message.answer(T(uid, "pay_receipt_prompt"))
-
-
+    await state.update_data(plan=plan)
+    await callback.message.answer(T(uid, "pay_receipt_prompt", plan=T(uid, "plan_" + plan), price=money(plan_price(plan))))
+ 
+ 
 @dp.message(Pay.receipt, F.photo | F.document)
 async def pay_receipt(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -775,9 +823,11 @@ async def pay_receipt(message: types.Message, state: FSMContext):
         file_id, ftype = message.photo[-1].file_id, "photo"
     else:
         file_id, ftype = message.document.file_id, "document"
+    plan = (await state.get_data()).get("plan", "unlimited")
+    price = plan_price(plan)
     with db() as c:
-        cur = c.execute("INSERT INTO payments (user_id, status, file_id, ftype, created, amount) VALUES (?, 'pending', ?, ?, ?, ?)",
-                        (uid, file_id, ftype, int(time.time()), PRICE))
+        cur = c.execute("INSERT INTO payments (user_id, status, file_id, ftype, created, amount, plan) VALUES (?, 'pending', ?, ?, ?, ?, ?)",
+                        (uid, file_id, ftype, int(time.time()), price, plan))
         pid = cur.lastrowid
         c.commit()
     await state.clear()
@@ -785,7 +835,7 @@ async def pay_receipt(message: types.Message, state: FSMContext):
     u = message.from_user
     caption = (f"💳 <b>Yangi to'lov #{pid}</b>\n👤 {esc(u.full_name)}"
                + (f" (@{esc(u.username)})" if u.username else "")
-               + f"\n🆔 <code>{u.id}</code>\n💰 {money(PRICE)} so'm")
+               + f"\n🆔 <code>{u.id}</code>\n📦 Tarif: {'🎬 1 ta taklifnoma' if plan == 'single' else '♾ Cheksiz'}\n💰 {money(price)} so'm")
     kb = ikb([[btn("✅ Tasdiqlash", f"pay:ok:{pid}"), btn("❌ Rad etish", f"pay:no:{pid}")]])
     for aid in ADMIN_IDS:
         try:
@@ -796,13 +846,13 @@ async def pay_receipt(message: types.Message, state: FSMContext):
         except Exception as ex:
             logging.warning("adminga chek yuborilmadi (%s): %s", aid, ex)
     run_bg(safe_push_backup())
-
-
+ 
+ 
 @dp.message(Pay.receipt)
 async def pay_receipt_other(message: types.Message):
     await message.answer(T(message.from_user.id, "pay_need_photo"))
-
-
+ 
+ 
 @dp.callback_query(F.data.startswith("pay:ok:") | F.data.startswith("pay:no:"))
 async def cb_pay_decide(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -810,10 +860,10 @@ async def cb_pay_decide(callback: types.CallbackQuery):
     _, action, pid = callback.data.split(":")
     pid = int(pid)
     with db() as c:
-        row = c.execute("SELECT user_id, status FROM payments WHERE id = ?", (pid,)).fetchone()
+        row = c.execute("SELECT user_id, status, COALESCE(plan, 'unlimited') FROM payments WHERE id = ?", (pid,)).fetchone()
     if not row:
         return await callback.answer("Topilmadi", show_alert=True)
-    uid, status = row
+    uid, status, plan = row
     if status != "pending":
         return await callback.answer("Bu to'lov allaqachon ko'rib chiqilgan.", show_alert=True)
     ok = action == "ok"
@@ -822,7 +872,10 @@ async def cb_pay_decide(callback: types.CallbackQuery):
                   ("approved" if ok else "rejected", int(time.time()), callback.from_user.id, pid))
         c.commit()
     if ok:
-        grant_access(uid)
+        if plan == "single":
+            add_credits(uid, 1)
+        else:
+            grant_access(uid)
     await callback.answer("✅ Tasdiqlandi" if ok else "❌ Rad etildi")
     mark = "\n\n✅ <b>TASDIQLANDI</b>" if ok else "\n\n❌ <b>RAD ETILDI</b>"
     try:
@@ -830,15 +883,18 @@ async def cb_pay_decide(callback: types.CallbackQuery):
     except Exception:
         pass
     try:
-        await bot.send_message(uid, T(uid, "pay_ok" if ok else "pay_no", admin=esc(ADMIN_CONTACT)))
+        if ok and plan == "single":
+            await bot.send_message(uid, T(uid, "pay_ok_single", n=get_credits(uid)))
+        else:
+            await bot.send_message(uid, T(uid, "pay_ok" if ok else "pay_no", admin=esc(ADMIN_CONTACT)))
     except Exception as ex:
         logging.info("foydalanuvchiga xabar yuborilmadi: %s", ex)
     run_bg(safe_push_backup())
-
-
+ 
+ 
 _demo_last = {}
-
-
+ 
+ 
 @dp.callback_query(F.data == "pay:demo")
 async def cb_pay_demo(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -867,8 +923,8 @@ async def cb_pay_demo(callback: types.CallbackQuery):
         logging.exception("demo xatosi")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-
-
+ 
+ 
 # ============================================================================================
 # TAKLIFNOMA YASASH
 # ============================================================================================
@@ -878,35 +934,35 @@ RENDER_SEM = None
 LAST_ORDER = {}
 _LAT = re.compile(r"[A-Za-z]")
 _CYR = re.compile(r"[А-Яа-яЁёЎўҚқҒғҲҳ]")
-
-
+ 
+ 
 def clean(s, n):
     return re.sub(r"\s+", " ", (s or "").strip())[:n]
-
-
+ 
+ 
 async def begin_invite(message, state):
     uid = message.from_user.id
-    if not has_access(uid):
+    if not can_create(uid):
         return await message.answer(T(uid, "pay_need") + pay_info_text(uid), reply_markup=pay_kb(uid))
     if uid in BUSY:
         return await message.answer(T(uid, "inv_busy"))
     await state.set_state(Inv.names)
     await state.update_data(order={})
     await message.answer(T(uid, "inv_names"))
-
-
+ 
+ 
 async def _store(state, **kw):
     data = await state.get_data()
     order = dict(data.get("order") or {})
     order.update(kw)
     await state.update_data(order=order)
     return order
-
-
+ 
+ 
 def _reject_command(message):
     return (message.text or "").startswith("/")
-
-
+ 
+ 
 @dp.message(Inv.names, F.text)
 async def inv_names(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -918,8 +974,8 @@ async def inv_names(message: types.Message, state: FSMContext):
     await _store(state, names=v)
     await state.set_state(Inv.date)
     await message.answer(T(uid, "inv_date"))
-
-
+ 
+ 
 @dp.message(Inv.date, F.text)
 async def inv_date(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -931,8 +987,8 @@ async def inv_date(message: types.Message, state: FSMContext):
     await _store(state, date=v)
     await state.set_state(Inv.time)
     await message.answer(T(uid, "inv_time"))
-
-
+ 
+ 
 @dp.message(Inv.time, F.text)
 async def inv_time(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -942,8 +998,8 @@ async def inv_time(message: types.Message, state: FSMContext):
     await _store(state, time="" if v in ("-", "—", "") else v)
     await state.set_state(Inv.venue)
     await message.answer(T(uid, "inv_venue"))
-
-
+ 
+ 
 @dp.message(Inv.venue, F.text)
 async def inv_venue(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -957,8 +1013,8 @@ async def inv_venue(message: types.Message, state: FSMContext):
     await message.answer(T(uid, "inv_lang"), reply_markup=ikb([
         [btn(LANG_NAMES["uz"], "il:uz"), btn(LANG_NAMES["uz_cyrl"], "il:uz_cyrl")],
         [btn(LANG_NAMES["ru"], "il:ru"), btn(LANG_NAMES["en"], "il:en")]]))
-
-
+ 
+ 
 @dp.callback_query(Inv.lang, F.data.startswith("il:"))
 async def inv_lang(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -970,16 +1026,16 @@ async def inv_lang(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Inv.text)
     await callback.message.answer(T(uid, "inv_text"), reply_markup=ikb([
         [btn(T(uid, "inv_text_ai"), "it:ai")], [btn(T(uid, "inv_text_own"), "it:own")]]))
-
-
+ 
+ 
 async def ask_style(chat_id, uid, state):
     await state.set_state(Inv.style)
     await bot.send_message(chat_id, T(uid, "inv_style"), reply_markup=ikb([
         [btn(T(uid, "inv_style_rand"), "is:rand")],
         [btn(T(uid, "inv_style_pal"), "is:pal")],
         [btn(T(uid, "inv_style_desc"), "is:desc")]]))
-
-
+ 
+ 
 @dp.callback_query(Inv.text, F.data.startswith("it:"))
 async def inv_text_mode(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -1000,8 +1056,8 @@ async def inv_text_mode(callback: types.CallbackQuery, state: FSMContext):
     await _store(state, text=text)
     await callback.message.answer(T(uid, "inv_ai_text_used", text=esc(text)))
     await ask_style(callback.message.chat.id, uid, state)
-
-
+ 
+ 
 @dp.message(Inv.text, F.text)
 async def inv_text_own(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -1012,8 +1068,8 @@ async def inv_text_own(message: types.Message, state: FSMContext):
         return await message.answer(T(uid, "inv_text_prompt"))
     await _store(state, text=v)
     await ask_style(message.chat.id, uid, state)
-
-
+ 
+ 
 def palette_kb(uid):
     labels = PALETTE_LABELS[get_lang(uid) or "uz"]
     keys = list(studio.PALETTES)
@@ -1021,14 +1077,14 @@ def palette_kb(uid):
     for i in range(0, len(keys), 2):
         rows.append([btn(labels[k], f"ip:{k}") for k in keys[i:i + 2]])
     return ikb(rows)
-
-
+ 
+ 
 async def ask_music(chat_id, uid, state):
     await state.set_state(Inv.music)
     await bot.send_message(chat_id, T(uid, "inv_music"), reply_markup=ikb([
         [btn(T(uid, "inv_music_auto"), "im:auto")], [btn(T(uid, "inv_music_own"), "im:own")]]))
-
-
+ 
+ 
 @dp.callback_query(Inv.style, F.data.startswith("is:"))
 async def inv_style_mode(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -1042,8 +1098,8 @@ async def inv_style_mode(callback: types.CallbackQuery, state: FSMContext):
         return await callback.message.answer(T(uid, "inv_pal"), reply_markup=palette_kb(uid))
     await state.set_state(Inv.styletext)
     await callback.message.answer(T(uid, "inv_style_text"))
-
-
+ 
+ 
 @dp.callback_query(Inv.palette, F.data.startswith("ip:"))
 async def inv_palette(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -1053,8 +1109,8 @@ async def inv_palette(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await _store(state, palette=key, style=None)
     await ask_music(callback.message.chat.id, uid, state)
-
-
+ 
+ 
 @dp.message(Inv.styletext, F.text)
 async def inv_style_text(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -1069,8 +1125,8 @@ async def inv_style_text(message: types.Message, state: FSMContext):
         logging.info("AI dizayn tanlolmadi, tasodifiy: %s", ex)
     await _store(state, palette=palette, style=style)
     await ask_music(message.chat.id, uid, state)
-
-
+ 
+ 
 @dp.callback_query(Inv.music, F.data.startswith("im:"))
 async def inv_music_mode(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -1081,9 +1137,9 @@ async def inv_music_mode(callback: types.CallbackQuery, state: FSMContext):
         return await callback.message.answer(T(uid, "inv_music_prompt"))
     order = await _store(state, music_fid=None)
     await state.clear()
-    await start_generation(callback.message.chat.id, uid, order)
-
-
+    await start_generation(callback.message.chat.id, uid, order, new_order=True)
+ 
+ 
 @dp.message(Inv.musicfile, F.audio | F.voice | F.document)
 async def inv_music_file(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -1095,14 +1151,14 @@ async def inv_music_file(message: types.Message, state: FSMContext):
         return await message.answer(T(uid, "inv_music_bad"))
     order = await _store(state, music_fid=f.file_id)
     await state.clear()
-    await start_generation(message.chat.id, uid, order)
-
-
+    await start_generation(message.chat.id, uid, order, new_order=True)
+ 
+ 
 @dp.message(Inv.musicfile)
 async def inv_music_other(message: types.Message):
     await message.answer(T(message.from_user.id, "inv_music_bad"))
-
-
+ 
+ 
 def make_studio_data(order):
     """Foydalanuvchi kiritgan ma'lumotni taklifnoma tiliga moslaydi (lotin ↔ kirill)."""
     lang = order.get("lang", "uz")
@@ -1113,8 +1169,8 @@ def make_studio_data(order):
         elif lang == "uz" and _CYR.search(v):
             fields[k] = to_latin(v)
     return {**fields, "lang": lang, "palette": order.get("palette"), "style": order.get("style")}
-
-
+ 
+ 
 async def pick_music_file(workdir, order, music_seed):
     """Foydalanuvchi musiqasi → admin kutubxonasi (tasodifiy) → None (sintez qilinadi)."""
     fid = order.get("music_fid")
@@ -1132,10 +1188,12 @@ async def pick_music_file(workdir, order, music_seed):
     except Exception as ex:
         logging.info("musiqa yuklab bo'lmadi: %s", ex)
     return None
-
-
-async def start_generation(chat_id, uid, order, new_design=False, new_music=False):
+ 
+ 
+async def start_generation(chat_id, uid, order, new_design=False, new_music=False, new_order=False):
     order = dict(order)
+    if uid in BUSY:
+        return await bot.send_message(chat_id, T(uid, "inv_busy"))
     order.setdefault("seed", random.randint(1, 10 ** 9))
     order.setdefault("music_seed", order["seed"])
     if new_design:
@@ -1143,9 +1201,18 @@ async def start_generation(chat_id, uid, order, new_design=False, new_music=Fals
         order["palette"], order["style"] = None, None
     if new_music:
         order["music_seed"] = random.randint(1, 10 ** 9)
+    charged = delivered = False
+    if new_order:
+        order["regens"] = 0
+        if not has_access(uid):
+            if not use_credit(uid):
+                return await bot.send_message(chat_id, T(uid, "pay_need") + pay_info_text(uid), reply_markup=pay_kb(uid))
+            charged = True
+    elif new_design or new_music:
+        order["regens"] = order.get("regens", 0) + 1
+        if not has_access(uid) and order["regens"] > REGEN_LIMIT:
+            return await bot.send_message(chat_id, T(uid, "inv_regen_limit", n=REGEN_LIMIT), reply_markup=pay_kb(uid))
     LAST_ORDER[uid] = order
-    if uid in BUSY:
-        return await bot.send_message(chat_id, T(uid, "inv_busy"))
     BUSY.add(uid)
     status = None
     workdir = None
@@ -1172,6 +1239,8 @@ async def start_generation(chat_id, uid, order, new_design=False, new_music=Fals
         kb = ikb([[btn(T(uid, "inv_again_design"), "ir:design"), btn(T(uid, "inv_again_music"), "ir:music")],
                   [btn(T(uid, "inv_new"), "ir:new")]])
         caption = T(uid, "inv_done", names=esc(sdata["names"]))
+        if not has_access(uid):
+            caption += "\n" + T(uid, "sub_credits", n=get_credits(uid))
         if novideo:
             caption += "\n" + T(uid, "inv_novideo")
         if video:
@@ -1184,11 +1253,14 @@ async def start_generation(chat_id, uid, order, new_design=False, new_music=Fals
             with open(poster, "rb") as fh:
                 await bot.send_photo(chat_id, BufferedInputFile(fh.read(), filename="taklifnoma.png"),
                                      caption=caption, reply_markup=kb)
+        delivered = True
         with db() as c:
             c.execute("INSERT INTO orders (user_id, created, lang) VALUES (?, ?, ?)", (uid, int(time.time()), order.get("lang")))
             c.commit()
     except Exception:
         logging.exception("taklifnoma yuborishda xato")
+        if charged and not delivered:
+            add_credits(uid, 1)          # yasab bo'lmadi — kredit qaytariladi
         try:
             await bot.send_message(chat_id, T(uid, "err"))
         except Exception:
@@ -1202,36 +1274,34 @@ async def start_generation(chat_id, uid, order, new_design=False, new_music=Fals
                 await status.delete()
             except Exception:
                 pass
-
-
+ 
+ 
 @dp.callback_query(F.data.in_({"ir:design", "ir:music"}))
 async def inv_again(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
     await callback.answer()
     act = callback.data.split(":")[1]
-    if not has_access(uid):
-        return await callback.message.answer(T(uid, "pay_need") + pay_info_text(uid), reply_markup=pay_kb(uid))
     order = LAST_ORDER.get(uid)
     if not order:
         return await callback.message.answer(T(uid, "inv_expired"))
     await start_generation(callback.message.chat.id, uid, order, new_design=(act == "design"), new_music=(act == "music"))
-
-
+ 
+ 
 # «Yangi taklifnoma» tugmasi (callback'da message.from_user bot bo'lgani uchun alohida handler)
 @dp.callback_query(F.data == "ir:new")
 async def inv_new_cb(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
     await callback.answer()
     await state.clear()
-    if not has_access(uid):
+    if not can_create(uid):
         return await callback.message.answer(T(uid, "pay_need") + pay_info_text(uid), reply_markup=pay_kb(uid))
     if uid in BUSY:
         return await callback.message.answer(T(uid, "inv_busy"))
     await state.set_state(Inv.names)
     await state.update_data(order={})
     await callback.message.answer(T(uid, "inv_names"))
-
-
+ 
+ 
 # ============================================================================================
 # TARJIMA va XATOLARNI TOPISH
 # ============================================================================================
@@ -1241,8 +1311,8 @@ def tr_lang_kb():
     for i in range(0, len(keys), 2):
         rows.append([btn(TR_LANGS[k][0], f"tt:{k}") for k in keys[i:i + 2]])
     return ikb(rows)
-
-
+ 
+ 
 @dp.callback_query(F.data.startswith("tt:"))
 async def cb_tr_lang(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -1256,16 +1326,16 @@ async def cb_tr_lang(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(target=code)
     await callback.message.answer(T(uid, "tr_ready", lang=esc(TR_LANGS[code][0])),
                                   reply_markup=ikb([[btn(T(uid, "tr_change"), "tt:menu")]]))
-
-
+ 
+ 
 async def ai_gate(message, uid):
     """Bepul limit / kalit tekshiruvi. True — davom etish mumkin."""
     if not quota_ok(uid):
         await message.answer(T(uid, "free_over", n=FREE_DAILY), reply_markup=pay_kb(uid))
         return False
     return True
-
-
+ 
+ 
 @dp.message(Tr.wait, F.text, ~F.text.startswith("/"))
 async def tr_text(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -1288,8 +1358,8 @@ async def tr_text(message: types.Message, state: FSMContext):
         pass
     await send_long(message.chat.id, T(uid, "tr_result", lang=esc(TR_LANGS[target][0]), text=esc(out)),
                     reply_markup=ikb([[btn(T(uid, "tr_change"), "tt:menu")]]))
-
-
+ 
+ 
 @dp.message(Tr.wait, F.photo | F.document)
 async def tr_photo(message: types.Message, state: FSMContext):
     uid = message.from_user.id
@@ -1317,8 +1387,8 @@ async def tr_photo(message: types.Message, state: FSMContext):
         parts.append(T(uid, "tr_original", text=esc(res["original"])))
     parts.append(T(uid, "tr_result", lang=esc(TR_LANGS[target][0]), text=esc(res["translation"])))
     await send_long(message.chat.id, "\n\n".join(parts), reply_markup=ikb([[btn(T(uid, "tr_change"), "tt:menu")]]))
-
-
+ 
+ 
 def format_errors(uid, errors):
     items = []
     for e in errors[:15]:
@@ -1327,8 +1397,8 @@ def format_errors(uid, errors):
             line += f"\n   <i>{esc(e.get('reason'))}</i>"
         items.append(line)
     return T(uid, "gr_errors", items="\n".join(items))
-
-
+ 
+ 
 async def send_grammar_result(chat_id, uid, res):
     original = res.get("original") or ""
     corrected = res.get("corrected") or ""
@@ -1342,8 +1412,8 @@ async def send_grammar_result(chat_id, uid, res):
     else:
         parts.append(T(uid, "gr_none"))
     await send_long(chat_id, "\n\n".join(parts))
-
-
+ 
+ 
 @dp.message(Gr.wait, F.text, ~F.text.startswith("/"))
 async def gr_text(message: types.Message):
     uid = message.from_user.id
@@ -1367,8 +1437,8 @@ async def gr_text(message: types.Message):
     if same:
         return await message.answer(T(uid, "gr_none"))
     await send_grammar_result(message.chat.id, uid, {**res, "original": ""})
-
-
+ 
+ 
 @dp.message(Gr.wait, F.photo | F.document)
 async def gr_photo(message: types.Message):
     uid = message.from_user.id
@@ -1391,8 +1461,8 @@ async def gr_photo(message: types.Message):
         return await message.answer(T(uid, "ai_no_text_found"))
     quota_use(uid)
     await send_grammar_result(message.chat.id, uid, res)
-
-
+ 
+ 
 # ============================================================================================
 # ADMIN
 # ============================================================================================
@@ -1400,25 +1470,26 @@ def admin_kb():
     return ikb([[btn("📊 Statistika", "ad:stats"), btn("💳 Kutilayotgan to'lovlar", "ad:pending")],
                 [btn("🎵 Musiqa kutubxonasi", "ad:music")],
                 [btn("💾 Backup", "ad:backup")]])
-
-
+ 
+ 
 @dp.message(Command("admin"))
 async def cmd_admin(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return await message.answer(f"⛔ Faqat admin uchun. Sizning ID: <code>{message.from_user.id}</code>")
     await state.clear()
     await message.answer("🛠 <b>Admin panel</b>\n\nBuyruqlar:\n"
-                         "<code>/grant ID [kun]</code> — obuna berish (kun yozilmasa standart muddat)\n"
+                         "<code>/grant ID [kun]</code> — cheksiz tarif berish (kun yozilmasa standart muddat)\n"
+                         "<code>/credit ID [soni]</code> — 1 ta taklifnoma kreditini qo'shish\n"
                          "<code>/revoke ID</code> — obunani olib tashlash\n"
                          "<code>/aitest</code> — Groq ulanishini tekshirish\n"
                          "<code>/myid</code> — ID ni bilish", reply_markup=admin_kb())
-
-
+ 
+ 
 @dp.message(Command("myid"))
 async def cmd_myid(message: types.Message):
     await message.answer(f"🆔 <code>{message.from_user.id}</code>")
-
-
+ 
+ 
 @dp.message(Command("grant"))
 async def cmd_grant(message: types.Message, command: CommandObject):
     if not is_admin(message.from_user.id):
@@ -1435,8 +1506,27 @@ async def cmd_grant(message: types.Message, command: CommandObject):
     except Exception:
         pass
     run_bg(safe_push_backup())
-
-
+ 
+ 
+@dp.message(Command("credit"))
+async def cmd_credit(message: types.Message, command: CommandObject):
+    if not is_admin(message.from_user.id):
+        return
+    parts = (command.args or "").split()
+    if not parts or not parts[0].isdigit():
+        return await message.answer("Foydalanish: <code>/credit 123456789 [soni]</code> (standart 1)")
+    uid = int(parts[0])
+    n = int(parts[1]) if len(parts) > 1 and re.fullmatch(r"-?\d+", parts[1]) else 1
+    add_credits(uid, n)
+    await message.answer(f"✅ {uid}: kreditlar {get_credits(uid)} ta.")
+    if n > 0:
+        try:
+            await bot.send_message(uid, T(uid, "pay_ok_single", n=get_credits(uid)))
+        except Exception:
+            pass
+    run_bg(safe_push_backup())
+ 
+ 
 @dp.message(Command("revoke"))
 async def cmd_revoke(message: types.Message, command: CommandObject):
     if not is_admin(message.from_user.id):
@@ -1447,8 +1537,8 @@ async def cmd_revoke(message: types.Message, command: CommandObject):
     revoke_access(int(arg))
     await message.answer(f"✅ {arg} obunasi olib tashlandi.")
     run_bg(safe_push_backup())
-
-
+ 
+ 
 @dp.message(Command("aitest"))
 async def cmd_aitest(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -1463,8 +1553,8 @@ async def cmd_aitest(message: types.Message):
                              f"Matn modellari: {esc(', '.join(TEXT_MODELS))}\nRasm modellari: {esc(', '.join(VISION_MODELS))}")
     except Exception as ex:
         await message.answer(f"❌ AI xatosi:\n<code>{esc(str(ex)[:500])}</code>")
-
-
+ 
+ 
 @dp.callback_query(F.data == "ad:stats")
 async def ad_stats(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -1481,8 +1571,8 @@ async def ad_stats(callback: types.CallbackQuery):
     await callback.message.answer(
         f"📊 <b>Statistika</b>\n\n👥 Foydalanuvchilar: {users}\n✅ Obunali: {paid}\n⏳ Kutilayotgan to'lovlar: {pend}\n"
         f"💰 Tasdiqlangan to'lovlar: {appr[0]} ta ({money(appr[1])} so'm)\n🎬 Yasalgan taklifnomalar: {orders}\n🎵 Musiqa: {music} ta")
-
-
+ 
+ 
 @dp.callback_query(F.data == "ad:pending")
 async def ad_pending(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -1504,8 +1594,8 @@ async def ad_pending(callback: types.CallbackQuery):
                 await bot.send_document(callback.message.chat.id, fid, caption=caption, reply_markup=kb)
         except Exception as ex:
             logging.warning("kutilayotgan chek yuborilmadi: %s", ex)
-
-
+ 
+ 
 # ---- musiqa kutubxonasi
 @dp.callback_query(F.data == "ad:music")
 async def ad_music(callback: types.CallbackQuery, state: FSMContext):
@@ -1521,8 +1611,8 @@ async def ad_music(callback: types.CallbackQuery, state: FSMContext):
         f"🎵 <b>Musiqa kutubxonasi</b>: {len(rows)} ta\n\nBu yerga qo'shilgan musiqalardan bot taklifnomalarga tasodifiy tanlaydi. "
         "Kutubxona bo'sh bo'lsa, bot musiqani o'zi sintez qiladi.\n⚠️ Faqat ruxsatli (mualliflik huquqi bilan bog'liq muammosiz) musiqa qo'shing.",
         reply_markup=ikb(kb))
-
-
+ 
+ 
 @dp.callback_query(F.data == "ad:madd")
 async def ad_music_add(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -1530,15 +1620,15 @@ async def ad_music_add(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(AdmMusic.add)
     await callback.message.answer("🎧 Audio (mp3) fayllarni ketma-ket yuboring. Tugagach /done yozing.")
-
-
+ 
+ 
 @dp.message(AdmMusic.add, Command("done"))
 async def ad_music_done(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Tayyor.", reply_markup=menu_kb(get_lang(message.from_user.id) or "uz"))
     run_bg(safe_push_backup())
-
-
+ 
+ 
 @dp.message(AdmMusic.add, F.audio | F.voice | F.document)
 async def ad_music_file(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -1550,8 +1640,8 @@ async def ad_music_file(message: types.Message):
         n = c.execute("SELECT COUNT(*) FROM music").fetchone()[0]
         c.commit()
     await message.answer(f"✅ Qo'shildi: {esc(title)} (jami {n} ta). Yana yuboring yoki /done")
-
-
+ 
+ 
 @dp.callback_query(F.data.startswith("ad:mdel:"))
 async def ad_music_del(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -1566,8 +1656,8 @@ async def ad_music_del(callback: types.CallbackQuery):
     except Exception:
         pass
     run_bg(safe_push_backup())
-
-
+ 
+ 
 # ============================================================================================
 # Zaxira nusxa (Render qayta ishga tushganda baza yo'qolmasligi uchun)
 # ============================================================================================
@@ -1577,20 +1667,20 @@ _restore_ran = [False]
 RESTORE_DONE = None
 _backup_lock = None
 restore_wait = set()
-
-
+ 
+ 
 def _admin_chat_id():
     return sorted(ADMIN_IDS)[0] if ADMIN_IDS else None
-
-
+ 
+ 
 def make_backup_file():
     fd, path = tempfile.mkstemp(prefix="tk_backup_", suffix=".db")
     os.close(fd)
     with db() as src, closing(sqlite3.connect(path)) as dst:
         src.backup(dst)
     return path
-
-
+ 
+ 
 def restore_db_file(path):
     try:
         with closing(sqlite3.connect(path)) as c:
@@ -1606,24 +1696,24 @@ def restore_db_file(path):
     init_db()
     _LANG.clear()
     return True
-
-
+ 
+ 
 def db_fingerprint():
     h = hashlib.sha1()
     with db() as c:
-        for q in ("SELECT user_id, lang, paid_until FROM users ORDER BY user_id",
+        for q in ("SELECT user_id, lang, paid_until, credits FROM users ORDER BY user_id",
                   "SELECT id, status, user_id FROM payments ORDER BY id",
                   "SELECT id, file_id FROM music ORDER BY id"):
             for row in c.execute(q):
                 h.update(repr(row).encode("utf-8", "ignore"))
     return h.hexdigest()
-
-
+ 
+ 
 def db_has_data():
     with db() as c:
         return bool(c.execute("SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM payments)").fetchone()[0])
-
-
+ 
+ 
 async def _pinned_backup(chat_id):
     try:
         chat = await bot.get_chat(chat_id)
@@ -1636,8 +1726,8 @@ async def _pinned_backup(chat_id):
     except Exception as ex:
         logging.info("qadalgan zaxira topilmadi: %s", ex)
     return None
-
-
+ 
+ 
 async def push_backup(chat_id, force=False):
     async with _backup_lock:
         fp = await asyncio.to_thread(db_fingerprint)
@@ -1670,8 +1760,8 @@ async def push_backup(chat_id, force=False):
                 os.remove(path)
             except OSError:
                 pass
-
-
+ 
+ 
 async def safe_push_backup(force=False):
     if RESTORE_DONE is None or not RESTORE_DONE.is_set():
         return
@@ -1682,8 +1772,8 @@ async def safe_push_backup(force=False):
         await push_backup(chat_id, force=force)
     except Exception as ex:
         logging.warning("zaxira xatosi: %s", ex)
-
-
+ 
+ 
 async def startup_restore():
     try:
         chat_id = _admin_chat_id()
@@ -1718,15 +1808,15 @@ async def startup_restore():
         logging.exception("avtomatik tiklash xatosi")
     finally:
         RESTORE_DONE.set()
-
-
+ 
+ 
 async def startup_restore_once():
     if _restore_ran[0]:
         return
     _restore_ran[0] = True
     await startup_restore()
-
-
+ 
+ 
 async def backup_worker():
     await RESTORE_DONE.wait()
     await asyncio.sleep(30)
@@ -1738,8 +1828,8 @@ async def backup_worker():
         except Exception as ex:
             logging.warning("auto-backup xatosi: %s", ex)
         await asyncio.sleep(max(BACKUP_MINUTES, 1) * 60)
-
-
+ 
+ 
 async def send_backup(chat_id, caption):
     path = await asyncio.to_thread(make_backup_file)
     try:
@@ -1749,30 +1839,30 @@ async def send_backup(chat_id, caption):
             os.remove(path)
         except OSError:
             pass
-
-
+ 
+ 
 @dp.callback_query(F.data == "ad:backup")
 async def ad_backup(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return await callback.answer("⛔", show_alert=True)
     await callback.answer()
     await send_backup(callback.message.chat.id, "💾 Baza nusxasi. Tiklash: /restore")
-
-
+ 
+ 
 @dp.message(Command("backup"))
 async def cmd_backup(message: types.Message):
     if is_admin(message.from_user.id):
         await send_backup(message.chat.id, "💾 Baza nusxasi. Tiklash: /restore")
-
-
+ 
+ 
 @dp.message(Command("restore"))
 async def cmd_restore(message: types.Message, state: FSMContext):
     if is_admin(message.from_user.id):
         await state.clear()
         restore_wait.add(message.from_user.id)
         await message.answer("📥 Endi avval olingan .db faylni yuboring. ⚠️ Hozirgi baza almashtiriladi!\nBekor qilish: /cancel")
-
-
+ 
+ 
 @dp.message(StateFilter(None), F.document)
 async def on_restore_document(message: types.Message):
     uid = message.from_user.id
@@ -1790,8 +1880,8 @@ async def on_restore_document(message: types.Message):
     await message.answer("✅ Baza tiklandi!" if ok else "❌ Bu fayl mos emas yoki buzilgan.")
     if ok:
         run_bg(safe_push_backup(force=True))
-
-
+ 
+ 
 # ============================================================================================
 # Qolgan xabarlar va xatolar
 # ============================================================================================
@@ -1802,8 +1892,8 @@ async def fallback(message: types.Message):
     if not get_lang(uid):
         return await message.answer(LANG_PICK_TEXT, reply_markup=lang_kb())
     await message.answer(T(uid, "welcome", name=esc(message.from_user.first_name or "")), reply_markup=menu_kb(get_lang(uid)))
-
-
+ 
+ 
 @dp.errors()
 async def on_error(event: ErrorEvent):
     logging.exception("Handler xatosi: %s", event.exception)
@@ -1820,8 +1910,8 @@ async def on_error(event: ErrorEvent):
     except Exception:
         pass
     return True
-
-
+ 
+ 
 async def main():
     global RESTORE_DONE, _backup_lock, RENDER_SEM, _ai_sem
     RESTORE_DONE = asyncio.Event()
@@ -1851,7 +1941,7 @@ async def main():
     if _http and not _http.closed:
         await _http.close()
     await bot.session.close()
-
-
+ 
+ 
 if __name__ == "__main__":
     asyncio.run(main())
