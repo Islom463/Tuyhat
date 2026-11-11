@@ -1,14 +1,14 @@
 """
 texts.py — bot matnlari (o'zbek lotin, o'zbek kirill, rus, ingliz) va lotin→kirill o'giruvchi.
-
+ 
 Kirill matnlari alohida yozilmaydi: o'zbek lotin matni avtomatik kirillga o'giriladi
 (HTML teglar, {joy_belgilari}, @username va /buyruqlar o'zgarmaydi).
 """
 import re
-
+ 
 LANGS = ("uz", "uz_cyrl", "ru", "en")
 LANG_NAMES = {"uz": "🇺🇿 O'zbekcha", "uz_cyrl": "🇺🇿 Ўзбекча", "ru": "🇷🇺 Русский", "en": "🇬🇧 English"}
-
+ 
 # ----------------------------------------------------------------------------------------------
 # Lotin -> Kirill (o'zbek)
 # ----------------------------------------------------------------------------------------------
@@ -18,8 +18,8 @@ _PROTECT = re.compile(
 _VOW = set("aeiou")
 _MAP = dict(a="а", b="б", d="д", f="ф", g="г", h="ҳ", i="и", j="ж", k="к", l="л", m="м", n="н", o="о", p="п",
             q="қ", r="р", s="с", t="т", u="у", v="в", x="х", y="й", z="з", c="ц", w="в")
-
-
+ 
+ 
 def _lat2cyr(s):
     s = re.sub(r"[ʻʼ‘’`´]", "'", s)
     out, i, n = [], 0, len(s)
@@ -34,10 +34,10 @@ def _lat2cyr(s):
         nx2 = s[i + 2] if i + 2 < n else ""
         prev = s[i - 1] if i > 0 else ""
         up = ch.isupper()
-
+ 
         def put(c):
             out.append(c.upper() if up else c)
-
+ 
         if lo == "o" and nx == "'":
             put("ў"); i += 2; continue
         if lo == "g" and nx == "'":
@@ -58,19 +58,19 @@ def _lat2cyr(s):
             continue
         put(_MAP.get(lo, ch)); i += 1
     return "".join(out)
-
-
+ 
+ 
 def to_cyrillic(text):
     parts = _PROTECT.split(text)
     return "".join(p if i % 2 else _lat2cyr(p) for i, p in enumerate(parts))
-
-
+ 
+ 
 _CYR2LAT = {"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "yo", "ж": "j", "з": "z", "и": "i",
             "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t",
             "у": "u", "ф": "f", "х": "x", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sh", "ъ": "'", "ы": "i", "ь": "",
             "э": "e", "ю": "yu", "я": "ya", "ў": "o'", "қ": "q", "ғ": "g'", "ҳ": "h"}
-
-
+ 
+ 
 def to_latin(text):
     """Kirill -> o'zbek lotin (taxminiy; ismlar uchun yetarli)."""
     out = []
@@ -84,8 +84,8 @@ def to_latin(text):
         else:
             out.append(ch)
     return "".join(out)
-
-
+ 
+ 
 # ----------------------------------------------------------------------------------------------
 # Bot matnlari
 # ----------------------------------------------------------------------------------------------
@@ -100,7 +100,7 @@ PALETTE_LABELS = {
            "kobalt": "💙 Cobalt", "firuza": "🌊 Teal", "krem": "🤍 Cream", "pushti": "🌸 Blush",
            "osmon": "☁️ Sky", "shalfey": "🍃 Sage"},
 }
-
+ 
 TR_LANGS = {  # tarjima tillari: kod -> (nomi, Groq uchun tavsif)
     "uz": ("🇺🇿 O'zbekcha (lotin)", "Uzbek (Latin script, standard o' and g' letters)"),
     "uz_cyrl": ("🇺🇿 Ўзбекча (кирилл)", "Uzbek (Cyrillic script)"),
@@ -113,7 +113,7 @@ TR_LANGS = {  # tarjima tillari: kod -> (nomi, Groq uchun tavsif)
     "ko": ("🇰🇷 한국어", "Korean"),
     "zh": ("🇨🇳 中文", "Chinese (Simplified)"),
 }
-
+ 
 S = {
     # ------------------------------------------------------------------------------ O'ZBEKCHA (lotin)
     "uz": {
@@ -350,14 +350,80 @@ S = {
         "err": "⚠️ Something went wrong. Try again or press /start.",
     },
 }
-
+ 
+# ---- Tariflar: 1 ta taklifnoma / cheksiz (yuqoridagi eski matnlarni yangilaydi)
+S["uz"].update({
+    "m_pay": "💳 To'lov",
+    "pay_info": ("💳 <b>Narxlar</b>\n\n"
+                 "🎬 1 ta taklifnoma — <b>{price1} so'm</b>\n   (ichida {regen} marta «boshqa dizayn / musiqa»)\n"
+                 "♾ Cheksiz ({period}) — <b>{price2} so'm</b>\n\n"
+                 "To'lov kartasi:\n<code>{card}</code>\n{owner}\n\n"
+                 "1️⃣ Kartaga tarif narxini o'tkazing\n"
+                 "2️⃣ Pastdagi tarif tugmasini bosib, to'lov chekini (skrinshot) yuboring\n"
+                 "3️⃣ Admin tasdiqlagach, taklifnoma yasash ochiladi (odatda bir necha daqiqada)\n\n"
+                 "Savollar uchun admin: {admin}"),
+    "pay_btn_single": "📤 1 ta taklifnoma · {price} so'm",
+    "pay_btn_unlimited": "📤 Cheksiz · {price} so'm",
+    "plan_single": "1 ta taklifnoma", "plan_unlimited": "Cheksiz",
+    "pay_receipt_prompt": "📤 Tarif: <b>{plan}</b> — {price} so'm.\nTo'lov chekini (rasm yoki skrinshot) yuboring.\nBekor qilish: /cancel",
+    "pay_ok": "🎉 <b>To'lovingiz tasdiqlandi!</b>\n♾ Endi cheksiz taklifnoma yasashingiz mumkin. «🎬 Taklifnoma yasash» ni bosing.",
+    "pay_ok_single": "🎉 <b>To'lovingiz tasdiqlandi!</b>\n🎟 Hisobingizda <b>{n}</b> ta taklifnoma bor. «🎬 Taklifnoma yasash» ni bosing.",
+    "sub_credits": "🎟 Qolgan taklifnomalar: <b>{n}</b>",
+    "inv_regen_limit": "⚠️ Bu taklifnoma uchun «boshqa dizayn / musiqa» limiti ({n} marta) tugadi. Yangi taklifnoma uchun «💳 To'lov» bo'limiga o'ting.",
+    "free_over": ("⚠️ Bugungi bepul limit ({n} ta) tugadi.\nCheksiz foydalanish uchun «💳 To'lov» bo'limidan cheksiz tarifni oling. "
+                  "Limit ertaga yangilanadi."),
+})
+S["ru"].update({
+    "m_pay": "💳 Оплата",
+    "pay_info": ("💳 <b>Цены</b>\n\n"
+                 "🎬 1 приглашение — <b>{price1} сум</b>\n   (в цену входит {regen} раз «другой дизайн / музыка»)\n"
+                 "♾ Безлимит ({period}) — <b>{price2} сум</b>\n\n"
+                 "Карта для оплаты:\n<code>{card}</code>\n{owner}\n\n"
+                 "1️⃣ Переведите стоимость тарифа на карту\n"
+                 "2️⃣ Нажмите кнопку тарифа ниже и пришлите чек (скриншот)\n"
+                 "3️⃣ После подтверждения админом откроется создание приглашений (обычно за несколько минут)\n\n"
+                 "По вопросам пишите админу: {admin}"),
+    "pay_btn_single": "📤 1 приглашение · {price} сум",
+    "pay_btn_unlimited": "📤 Безлимит · {price} сум",
+    "plan_single": "1 приглашение", "plan_unlimited": "Безлимит",
+    "pay_receipt_prompt": "📤 Тариф: <b>{plan}</b> — {price} сум.\nПришлите чек об оплате (фото или скриншот).\nОтмена: /cancel",
+    "pay_ok": "🎉 <b>Платёж подтверждён!</b>\n♾ Теперь можно создавать приглашения без ограничений. Нажмите «🎬 Создать приглашение».",
+    "pay_ok_single": "🎉 <b>Платёж подтверждён!</b>\n🎟 На вашем счету приглашений: <b>{n}</b>. Нажмите «🎬 Создать приглашение».",
+    "sub_credits": "🎟 Осталось приглашений: <b>{n}</b>",
+    "inv_regen_limit": "⚠️ Лимит «другой дизайн / музыка» для этого приглашения ({n}) исчерпан. Для нового приглашения перейдите в «💳 Оплата».",
+    "free_over": ("⚠️ Бесплатный лимит на сегодня ({n}) исчерпан.\nДля безлимита возьмите безлимитный тариф в «💳 Оплата». "
+                  "Лимит обновится завтра."),
+})
+S["en"].update({
+    "m_pay": "💳 Payment",
+    "pay_info": ("💳 <b>Prices</b>\n\n"
+                 "🎬 1 invitation — <b>{price1} UZS</b>\n   (includes {regen} × «another design / music»)\n"
+                 "♾ Unlimited ({period}) — <b>{price2} UZS</b>\n\n"
+                 "Payment card:\n<code>{card}</code>\n{owner}\n\n"
+                 "1️⃣ Transfer the plan price to the card\n"
+                 "2️⃣ Tap the plan button below and send the receipt (screenshot)\n"
+                 "3️⃣ After the admin confirms, invitation creation unlocks (usually within minutes)\n\n"
+                 "Questions: {admin}"),
+    "pay_btn_single": "📤 1 invitation · {price} UZS",
+    "pay_btn_unlimited": "📤 Unlimited · {price} UZS",
+    "plan_single": "1 invitation", "plan_unlimited": "Unlimited",
+    "pay_receipt_prompt": "📤 Plan: <b>{plan}</b> — {price} UZS.\nSend the payment receipt (photo or screenshot).\nCancel: /cancel",
+    "pay_ok": "🎉 <b>Payment confirmed!</b>\n♾ You can now create unlimited invitations. Tap «🎬 Create invitation».",
+    "pay_ok_single": "🎉 <b>Payment confirmed!</b>\n🎟 Invitations on your account: <b>{n}</b>. Tap «🎬 Create invitation».",
+    "sub_credits": "🎟 Invitations left: <b>{n}</b>",
+    "inv_regen_limit": "⚠️ The «another design / music» limit for this invitation ({n}) is used up. For a new invitation go to «💳 Payment».",
+    "free_over": ("⚠️ Today's free limit ({n}) is used up.\nGet the unlimited plan in «💳 Payment» for unlimited use. "
+                  "The limit resets tomorrow."),
+})
+ 
 # o'zbek kirill: lotin matnidan avtomatik hosil qilinadi
 S["uz_cyrl"] = {k: to_cyrillic(v) for k, v in S["uz"].items()}
 PALETTE_LABELS["uz_cyrl"] = {k: to_cyrillic(v) for k, v in PALETTE_LABELS["uz"].items()}
-
-
+ 
+ 
 def tr(_lang, _key, /, **kw):
     """_lang/_key faqat pozitsion: matn ichidagi {lang} joy belgisi bilan to'qnashmaydi."""
     base = S.get(_lang) or S["uz"]
     text = base.get(_key) or S["uz"].get(_key, _key)
     return text.format(**kw) if kw else text
+ 
