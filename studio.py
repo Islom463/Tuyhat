@@ -1,6 +1,6 @@
 """
 studio.py — taklifnoma dizayni, musiqasi va videosini yasaydigan modul.
-
+ 
 Hamma narsa kod bilan chiziladi (tashqi rasm/musiqa kerak emas):
   • fon + naqshlar (mandala, suzani, miḥrob/arka, yulduz, o'simlik) — PIL bilan
   • matn qatlamlari (ism, sana, manzil...) — ketma-ket paydo bo'ladi
@@ -19,12 +19,12 @@ import shutil
 import subprocess
 import tempfile
 import zlib
-
+ 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-
+ 
 from fontdata import FONTS_B64Z
-
+ 
 # ----------------------------------------------------------------------------------------------
 # Umumiy o'lchamlar
 # ----------------------------------------------------------------------------------------------
@@ -34,14 +34,14 @@ BW, BH = W + 2 * PADX, H + 2 * PADY
 SS = 2                        # naqshlar 2x o'lchamda chizilib, kichraytiriladi (silliq chiziqlar)
 DURATION = 11.0               # video davomiyligi (soniya)
 FPS = 24
-
+ 
 # ----------------------------------------------------------------------------------------------
 # Shriftlar (fontdata.py ichidan, vaqtinchalik papkaga yoziladi)
 # ----------------------------------------------------------------------------------------------
 _FONT_DIR = os.path.join(tempfile.gettempdir(), "taklif_fonts")
 _font_cache = {}
-
-
+ 
+ 
 def _font_file(key):
     os.makedirs(_FONT_DIR, exist_ok=True)
     path = os.path.join(_FONT_DIR, key + ".font")
@@ -50,32 +50,32 @@ def _font_file(key):
         with open(path, "wb") as fh:
             fh.write(raw)
     return path
-
-
+ 
+ 
 def font(key, size):
     k = (key, int(size))
     if k not in _font_cache:
         _font_cache[k] = ImageFont.truetype(_font_file(key), int(size))
     return _font_cache[k]
-
-
+ 
+ 
 # ----------------------------------------------------------------------------------------------
 # Ranglar palitralari
 # ----------------------------------------------------------------------------------------------
 def _rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-
-
+ 
+ 
 def _hex(c):
     return "#%02x%02x%02x" % tuple(int(max(0, min(255, v))) for v in c)
-
-
+ 
+ 
 def _lum(c):
     r, g, b = [v / 255 for v in c]
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
+ 
+ 
 # nomi: (fon yuqori, fon past, naqsh/aksent, asosiy matn, ikkinchi matn)
 PALETTES = {
     "bordo":    ("#6b1d34", "#26080f", "#d8b66f", "#fbf3e6", "#e6cfa4"),
@@ -102,8 +102,8 @@ PALETTE_ALIASES = {
     "shalfey": "shalfey", "olive": "shalfey", "sage": "shalfey",
 }
 STYLES = ("mandala", "suzani", "arch", "star", "vine")
-
-
+ 
+ 
 def resolve_palette(spec, rng):
     """spec: palitra nomi (str), {'bg1','bg2','accent','text'} (hex) yoki None (tasodifiy)."""
     if isinstance(spec, dict):
@@ -128,20 +128,20 @@ def resolve_palette(spec, rng):
         spec = rng.choice(list(PALETTES))
     bg1, bg2, acc, txt, sub = [_rgb(x) for x in PALETTES[spec]]
     return {"bg1": bg1, "bg2": bg2, "acc": acc, "txt": txt, "sub": sub, "light": _lum(bg1) > 0.6, "name": spec}
-
-
+ 
+ 
 # ----------------------------------------------------------------------------------------------
 # Chizma yordamchilari (hammasi SS barobar kattalashtirilgan kanvasda)
 # ----------------------------------------------------------------------------------------------
 def _s(v):
     return int(round(v * SS))
-
-
+ 
+ 
 def _rot(pts, ang, cx, cy):
     ca, sa = math.cos(ang), math.sin(ang)
     return [(cx + x * ca - y * sa, cy + x * sa + y * ca) for x, y in pts]
-
-
+ 
+ 
 def petal_pts(cx, cy, ang, length, width, r0=0.0, steps=22):
     """Mandala bargi (tig' shaklida), markazdan `r0` masofadan boshlanadi."""
     top, bot = [], []
@@ -152,8 +152,8 @@ def petal_pts(cx, cy, ang, length, width, r0=0.0, steps=22):
         top.append((x, y))
         bot.append((x, -y))
     return _rot(top + bot[::-1], ang, cx, cy)
-
-
+ 
+ 
 def rosette(d, cx, cy, r, n, col, lw, rings=3, rot=0.0, dots=True):
     """Gul-mandala: ichma-ich barglar, aylanalar, nuqtalar."""
     for k in range(rings):
@@ -173,35 +173,35 @@ def rosette(d, cx, cy, r, n, col, lw, rings=3, rot=0.0, dots=True):
             px, py = cx + math.cos(ang) * r * 1.32, cy + math.sin(ang) * r * 1.32
             rd = r * 0.035
             d.ellipse((px - rd, py - rd, px + rd, py + rd), fill=col)
-
-
+ 
+ 
 def leaf(d, x, y, ang, length, width, col, lw, fill=False):
     pts = petal_pts(x, y, ang, length, width, steps=14)
     if fill:
         d.polygon(pts, fill=col)
     else:
         d.line(pts + [pts[0]], fill=col, width=lw, joint="curve")
-
-
+ 
+ 
 def diamond(d, cx, cy, r, col, fill=True, lw=2):
     pts = [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)]
     if fill:
         d.polygon(pts, fill=col)
     else:
         d.line(pts + [pts[0]], fill=col, width=lw)
-
-
+ 
+ 
 def star8(d, cx, cy, r, col, lw):
     """8 qirrali yulduz (ikki kvadrat)."""
     for off in (0, math.pi / 4):
         pts = [(cx + r * math.cos(off + i * math.pi / 2), cy + r * math.sin(off + i * math.pi / 2)) for i in range(4)]
         d.line(pts + [pts[0]], fill=col, width=lw, joint="curve")
-
-
+ 
+ 
 def rounded_frame(d, x0, y0, x1, y1, rad, col, lw):
     d.rounded_rectangle((x0, y0, x1, y1), radius=rad, outline=col, width=lw)
-
-
+ 
+ 
 def scallops(d, y, x0, x1, r, col, lw, up=True):
     """Yarim aylanalardan iborat bezak chizig'i (suzani chetlari)."""
     x = x0 + r
@@ -209,8 +209,8 @@ def scallops(d, y, x0, x1, r, col, lw, up=True):
         box = (x - r, y - r, x + r, y + r)
         d.arc(box, 180, 360, fill=col, width=lw) if up else d.arc(box, 0, 180, fill=col, width=lw)
         x += 2 * r
-
-
+ 
+ 
 def vine(d, x0, y0, x1, y1, amp, waves, col, lw, leaf_len, rng, side=1):
     """Sinus shaklidagi o'simlik shoxi, ikki tomonga barglar bilan."""
     steps = 140
@@ -226,8 +226,8 @@ def vine(d, x0, y0, x1, y1, amp, waves, col, lw, leaf_len, rng, side=1):
         base = math.atan2(yb - ya, xb - xa)
         for sgn in (-1, 1):
             leaf(d, xa, ya, base + sgn * 0.95, leaf_len * (0.8 + 0.4 * rng.random()), leaf_len * 0.36, col, max(1, lw - 1))
-
-
+ 
+ 
 # ----------------------------------------------------------------------------------------------
 # Fon yaratish
 # ----------------------------------------------------------------------------------------------
@@ -246,8 +246,8 @@ def gradient_bg(pal):
     noise = rng.normal(0, 1.6, (BH, BW, 1)).astype(np.float32)
     img = np.clip(img + noise, 0, 255).astype(np.uint8)
     return Image.fromarray(img, "RGB")
-
-
+ 
+ 
 def build_background(pal, style, rng):
     base = gradient_bg(pal).convert("RGBA")
     layer = Image.new("RGBA", (BW * SS, BH * SS), (0, 0, 0, 0))
@@ -259,20 +259,20 @@ def build_background(pal, style, rng):
     faint = acc + (38,)
     lw = max(2, SS * 1)
     px, py = PADX, PADY                        # ko'rinadigan oyna chegarasi
-
+ 
     def P(x, y):                               # ko'rinadigan oyna koordinatasini SS kanvasga o'tkazish
         return _s(x + px), _s(y + py)
-
+ 
     # ---- umumiy: qo'sh ramka
     fo, fi = 34, 50
     rounded_frame(d, *P(fo, fo), *P(W - fo, H - fo), _s(34), mid, lw)
     rounded_frame(d, *P(fi, fi), *P(W - fi, H - fi), _s(26), soft, lw)
-
+ 
     corner_pair = rng.choice([("tl", "br"), ("tr", "bl")])
-
+ 
     def corner_xy(c):
         return {"tl": (0, 0), "tr": (W, 0), "bl": (0, H), "br": (W, H)}[c]
-
+ 
     if style == "mandala":
         n = rng.choice([8, 10, 12])
         for c in corner_pair:
@@ -345,12 +345,12 @@ def build_background(pal, style, rng):
             sx = 1 if cx == 0 else -1
             sy = 1 if cy == 0 else -1
             rosette(d, *P(cx + sx * 76, cy + sy * 76), _s(40), 8, strong, lw, rings=2, dots=False)
-
+ 
     layer = layer.resize((BW, BH), Image.LANCZOS)
     out = Image.alpha_composite(base, layer)
     return out.convert("RGB")
-
-
+ 
+ 
 # ----------------------------------------------------------------------------------------------
 # Matn qatlamlari
 # ----------------------------------------------------------------------------------------------
@@ -360,12 +360,12 @@ def tracked(d, xy, text, fnt, fill, spacing):
         d.text((x, y), ch, font=fnt, fill=fill)
         x += d.textlength(ch, font=fnt) + spacing
     return x
-
-
+ 
+ 
 def tracked_width(d, text, fnt, spacing):
     return sum(d.textlength(ch, font=fnt) + spacing for ch in text) - spacing
-
-
+ 
+ 
 def wrap_text(d, text, fnt, max_w):
     words, lines, cur = text.split(), [], ""
     for w in words:
@@ -378,19 +378,19 @@ def wrap_text(d, text, fnt, max_w):
     if cur:
         lines.append(cur)
     return lines
-
-
+ 
+ 
 def fit_font(d, key, text, start, max_w, min_size=28):
     size = start
     while size > min_size and d.textlength(text, font=font(key, size)) > max_w:
         size -= 4
     return font(key, size)
-
-
+ 
+ 
 _scratch = Image.new("RGBA", (10, 10))
 _sd = ImageDraw.Draw(_scratch)
-
-
+ 
+ 
 def fix_uz_quotes(text, lang):
     """o'zbek lotin: o' g' -> oʻ gʻ (to'g'ri belgi), boshqa tillarda oddiy apostrof."""
     text = re.sub(r"[’‘`´ʼ]", "'", text)
@@ -398,8 +398,8 @@ def fix_uz_quotes(text, lang):
         text = re.sub(r"(?<=[A-Za-z])'(?=[A-Za-z])", "ʻ", text)
         text = re.sub(r"(?<=[OoGg])'", "ʻ", text)
     return text
-
-
+ 
+ 
 LABELS = {
     "uz": {"head": "TO'YGA TAKLIF", "venue": "MANZIL", "at": "soat {t}"},
     "uz_cyrl": {"head": "ТЎЙГА ТАКЛИФ", "venue": "МАНЗИЛ", "at": "соат {t}"},
@@ -407,15 +407,15 @@ LABELS = {
     "en": {"head": "WEDDING INVITATION", "venue": "VENUE", "at": "at {t}"},
 }
 AND = {"uz": "&", "uz_cyrl": "&", "ru": "&", "en": "&"}
-
-
+ 
+ 
 def split_names(raw):
     raw = raw.strip()
     parts = re.split(r"\s*(?:&|\+|,|;|\bva\b|\bи\b|\band\b|\bВА\b|\bва\b)\s*", raw, maxsplit=1, flags=re.I)
     parts = [p.strip() for p in parts if p.strip()]
     return parts[:2] if len(parts) >= 2 else [raw]
-
-
+ 
+ 
 def build_groups(data, pal, style=None):
     """Matn qatlamlari: har biri alohida shaffof rasm + joylashuv + paydo bo'lish vaqti."""
     lang = data.get("lang", "uz")
@@ -423,10 +423,10 @@ def build_groups(data, pal, style=None):
     acc, txt, sub = pal["acc"], pal["txt"], pal["sub"]
     maxw = 560
     groups = []
-
+ 
     def layer(h):
         return Image.new("RGBA", (W, h), (0, 0, 0, 0))
-
+ 
     # 1) sarlavha + bezak chizig'i
     head = fix_uz_quotes(lab["head"], lang)
     fh = font("inter_sb", 25 if len(head) < 18 else 21)
@@ -438,7 +438,7 @@ def build_groups(data, pal, style=None):
     d.line([(W / 2 + 22, 52), (W / 2 + 150, 52)], fill=acc + (190,), width=2)
     diamond(d, W / 2, 52, 7, acc + (255,))
     groups.append({"im": im, "h": 70, "gap": 46, "t": 0.7, "d": 1.2})
-
+ 
     # 2) ismlar
     names = [fix_uz_quotes(n, lang) for n in split_names(data["names"])]
     fnts = [fit_font(_sd, "lora_it", n, 118, maxw, 44) for n in names]
@@ -459,7 +459,7 @@ def build_groups(data, pal, style=None):
         d.text(((W - w_) / 2, y), s, font=f, fill=col + (255,))
         y += hh + gap
     groups.append({"im": im, "h": total + 10, "gap": 40, "t": 1.9, "d": 1.4})
-
+ 
     # 3) sana va vaqt
     date = fix_uz_quotes(data["date"], lang)
     tm = data.get("time", "").strip()
@@ -475,7 +475,7 @@ def build_groups(data, pal, style=None):
         w_ = d.textlength(time_s, font=ftime)
         d.text(((W - w_) / 2, yy), time_s, font=ftime, fill=sub + (255,))
     groups.append({"im": im, "h": hh + 12, "gap": 38, "t": 3.3, "d": 1.2})
-
+ 
     # 4) manzil
     venue = fix_uz_quotes(data["venue"], lang)
     fl = font("inter_sb", 20)
@@ -489,7 +489,7 @@ def build_groups(data, pal, style=None):
     for i, ln in enumerate(vlines):
         d.text(((W - d.textlength(ln, font=fv)) / 2, 36 + i * 44), ln, font=fv, fill=txt + (255,))
     groups.append({"im": im, "h": hh, "gap": 40, "t": 4.5, "d": 1.2})
-
+ 
     # 5) taklif matni
     body = fix_uz_quotes(data["text"], lang)
     size = 34
@@ -506,7 +506,7 @@ def build_groups(data, pal, style=None):
     for i, ln in enumerate(blines[:6]):
         d.text(((W - d.textlength(ln, font=fb)) / 2, i * lh), ln, font=fb, fill=sub + (255,))
     groups.append({"im": im, "h": hh, "gap": 0, "t": 5.8, "d": 1.4})
-
+ 
     # joylashuv: vertikal markazlash
     top_min = 238 if style == "arch" else 150
     bottom_max = 1118 if style == "arch" else 1160
@@ -524,8 +524,8 @@ def build_groups(data, pal, style=None):
         g["y"] = y
         y += g["h"] + g["gap"]
     return groups
-
-
+ 
+ 
 def crop_group(g):
     """Qatlamni tarkibi (bbox) bo'yicha qirqib, kichik rasmga aylantiradi (ffmpeg uchun yengil)."""
     bbox = g["im"].getbbox()
@@ -535,8 +535,8 @@ def crop_group(g):
     x0, y0 = max(0, x0 - 6), max(0, y0 - 6)
     x1, y1 = min(W, x1 + 6), min(g["h"], y1 + 6)
     return g["im"].crop((x0, y0, x1, y1)), x0, g["y"] + y0
-
-
+ 
+ 
 # ----------------------------------------------------------------------------------------------
 # Yaltirash (sparkle) va nur chizig'i qatlamlari
 # ----------------------------------------------------------------------------------------------
@@ -559,8 +559,30 @@ def make_sparkles(pal, rng):
     full.paste(half, (0, 0))
     full.paste(half, (0, H))
     return full
-
-
+ 
+ 
+def make_sparkle_sprites(pal, rng, n=46):
+    """Yaltiroqlar kichik rasmcha (sprite) ko'rinishida: [(x, y, RGBA massiv), ...] — xotirani tejaydi."""
+    col = pal["acc"] if pal["light"] else tuple(min(255, int(c * 0.6 + 120)) for c in pal["acc"])
+    out = []
+    for _ in range(n):
+        x, y = rng.randint(30, W - 30), rng.randint(0, H - 1)
+        r = rng.choice([2, 2, 3, 3, 4, 6])
+        a = rng.randint(120, 235)
+        size = int(r * 5) + 4
+        im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        c = size / 2
+        if r >= 4:
+            pts = [(c, c - r * 2.1), (c + r * 0.5, c - r * 0.5), (c + r * 2.1, c), (c + r * 0.5, c + r * 0.5),
+                   (c, c + r * 2.1), (c - r * 0.5, c + r * 0.5), (c - r * 2.1, c), (c - r * 0.5, c - r * 0.5)]
+            d.polygon(pts, fill=col + (a,))
+        else:
+            d.ellipse((c - r, c - r, c + r, c + r), fill=col + (a,))
+        out.append((int(x - c), int(y - c), np.array(im)))
+    return out
+ 
+ 
 def make_sweep(pal):
     """Diagonal nur chizig'i — chapdan o'ngga o'tadi."""
     bw = 300
@@ -573,14 +595,14 @@ def make_sweep(pal):
     arr[..., 0:3] = 255 if not pal["light"] else 255
     arr[..., 3] = alpha.astype(np.uint8)
     return Image.fromarray(arr, "RGBA")
-
-
+ 
+ 
 # ----------------------------------------------------------------------------------------------
 # Musiqa sintezi
 # ----------------------------------------------------------------------------------------------
 _SR = 22050
-
-
+ 
+ 
 def _note(freq, dur, kind="pluck"):
     n = int(_SR * dur)
     t = np.arange(n) / _SR
@@ -596,8 +618,8 @@ def _note(freq, dur, kind="pluck"):
         env = np.clip(env, 0, 1)
         w = np.sin(2 * np.pi * freq * t) + 0.4 * np.sin(2 * np.pi * freq * 1.003 * t) + 0.2 * np.sin(4 * np.pi * freq * t)
     return w * env
-
-
+ 
+ 
 def _reverb(x, rng_np):
     n = int(_SR * 1.4)
     t = np.arange(n) / _SR
@@ -607,8 +629,8 @@ def _reverb(x, rng_np):
     size = 1 << int(np.ceil(np.log2(len(x) + n)))
     y = np.fft.irfft(np.fft.rfft(x, size) * np.fft.rfft(ir, size), size)[: len(x)]
     return 0.62 * x + 0.55 * y
-
-
+ 
+ 
 def synth_music(path, seed, seconds=DURATION + 1.5):
     """Romantik, sokin musiqa (arpeggio + pad + qo'ng'iroqcha ohang) — har seed uchun boshqacha."""
     import wave
@@ -619,14 +641,14 @@ def synth_music(path, seed, seconds=DURATION + 1.5):
     bpm = rng.choice([68, 72, 76, 80])
     beat = 60.0 / bpm
     scale = [0, 2, 3, 5, 7, 8, 10] if minor else [0, 2, 4, 5, 7, 9, 11]
-
+ 
     def midi(m):
         return 440.0 * 2 ** ((m - 69) / 12)
-
+ 
     def triad(deg):
         idx = [deg, deg + 2, deg + 4]
         return [root + scale[i % 7] + 12 * (i // 7) for i in idx]
-
+ 
     progs = [[0, 4, 5, 3], [5, 3, 0, 4], [0, 5, 3, 4], [0, 3, 5, 4], [0, 2, 3, 4]]
     prog = rng.choice(progs)
     total = int(_SR * seconds)
@@ -672,8 +694,8 @@ def synth_music(path, seed, seconds=DURATION + 1.5):
         wf.setframerate(_SR)
         wf.writeframes(pcm.tobytes())
     return path
-
-
+ 
+ 
 # ----------------------------------------------------------------------------------------------
 # Yig'ish: poster (rasm) + video
 # ----------------------------------------------------------------------------------------------
@@ -683,8 +705,86 @@ def ffmpeg_exe():
         return imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
         return shutil.which("ffmpeg") or "ffmpeg"
-
-
+ 
+ 
+def _blend(dst, src, x, y, alpha_mul=1.0):
+    """src (RGBA, to'g'ri alfa) ni dst (RGB, joyida) ustiga qo'yadi; chegaradan chiqqan qismi qirqiladi."""
+    h, w = src.shape[:2]
+    x0, y0, x1, y1 = max(x, 0), max(y, 0), min(x + w, W), min(y + h, H)
+    if x1 <= x0 or y1 <= y0 or alpha_mul <= 0:
+        return
+    s = src[y0 - y:y1 - y, x0 - x:x1 - x]
+    a = s[..., 3:4].astype(np.uint32)
+    if alpha_mul < 1:
+        a = (a * int(alpha_mul * 256)) >> 8
+    d = dst[y0:y1, x0:x1].astype(np.uint32)
+    dst[y0:y1, x0:x1] = ((d * (255 - a) + s[..., :3].astype(np.uint32) * a + 127) // 255).astype(np.uint8)
+ 
+ 
+def render_video_pipe(workdir, bg, groups, pal, rng, music_path, seed, duration=DURATION, fps=None, crf=26, preset=None):
+    """Kadrlarni Python'da yig'ib, ffmpeg'ga bitta oqim qilib beradi — xotira ~2 barobar kam (Render bepul rejasi uchun)."""
+    os.makedirs(workdir, exist_ok=True)
+    on_render = bool(os.getenv("RENDER"))
+    fps = fps or int(os.getenv("TK_FPS", "15" if on_render else str(FPS)))
+    preset = preset or os.getenv("TK_PRESET", "ultrafast" if on_render else "veryfast")
+    bg_arr = np.array(bg.convert("RGB"))
+    layers = []
+    for g in groups:
+        c = crop_group(g)
+        if c:
+            im, x, y = c
+            layers.append((np.array(im), x, y, g["t"], g["d"]))
+    sprites = make_sparkle_sprites(pal, rng)
+    speed = rng.choice([34, 42, 50])
+    sweep = np.array(make_sweep(pal))
+    out = os.path.join(workdir, "taklifnoma.mp4")
+    err_path = os.path.join(workdir, "ffmpeg_err.txt")
+    cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
+           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-framerate", str(fps), "-i", "-",
+           "-i", music_path,
+           "-map", "0:v", "-map", "1:a",
+           "-af", f"atrim=0:{duration},afade=t=in:st=0:d=0.6,afade=t=out:st={duration - 1.6}:d=1.6,"
+                  "aformat=sample_rates=44100:channel_layouts=stereo",
+           "-t", f"{duration}", "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+           "-movflags", "+faststart", "-c:a", "aac", "-b:a", "128k", out]
+    total = int(duration * fps)
+    with open(err_path, "wb") as errf:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=errf)
+        try:
+            for n in range(total):
+                t = n / fps
+                x = int(PADX + (PADX - 4) * math.sin(t * 0.45))
+                y = int(PADY + (PADY - 6) * (1 - t / duration))
+                frame = bg_arr[y:y + H, x:x + W].copy()
+                # yaltiroqlar (matn ostida)
+                fade_sp = min(1.0, max(0.0, (t - 0.3) / 1.6))
+                off = (t * speed) % H
+                for sx, sy, patch in sprites:
+                    py = int(sy - off)
+                    _blend(frame, patch, sx, py, fade_sp)
+                    _blend(frame, patch, sx, py + H, fade_sp)
+                # matn qatlamlari — ketma-ket paydo bo'ladi
+                for arr, lx, ly, t0, dur in layers:
+                    f = min(1.0, max(0.0, (t - t0) / dur))
+                    if f > 0:
+                        _blend(frame, arr, lx, ly, f)
+                # nur chizig'i
+                _blend(frame, sweep, int(-320 + (t % 6) * 240), 0)
+                # oxirida so'nish
+                if t > duration - 0.9:
+                    frame = (frame.astype(np.float32) * max(0.0, (duration - t) / 0.9)).astype(np.uint8)
+                proc.stdin.write(frame.tobytes())
+            proc.stdin.close()
+            proc.wait(timeout=600)
+        except Exception:
+            proc.kill()
+            raise
+    if proc.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) < 5000:
+        with open(err_path, "rb") as fh:
+            raise RuntimeError("ffmpeg (pipe) xatosi: " + fh.read()[-500:].decode("utf-8", "ignore"))
+    return out
+ 
+ 
 def compose_poster(bg, groups):
     frame = bg.crop((PADX, PADY, PADX + W, PADY + H)).convert("RGBA")
     for g in groups:
@@ -693,8 +793,8 @@ def compose_poster(bg, groups):
             im, x, y = c
             frame.alpha_composite(im, (x, y))
     return frame.convert("RGB")
-
-
+ 
+ 
 def render_video(workdir, bg, groups, pal, rng, music_path, seed, duration=DURATION, fps=None, crf=26, preset=None):
     on_render = bool(os.getenv("RENDER"))          # Render'da (kuchsiz bepul server) avtomatik yengil rejim
     fps = fps or int(os.getenv("TK_FPS", "15" if on_render else str(FPS)))
@@ -737,14 +837,16 @@ def render_video(workdir, bg, groups, pal, rng, music_path, seed, duration=DURAT
     chains.append(f"[{cur}][{idx}:v]overlay=x='-320+mod(t,6)*240':y=0:format=auto[vw]")
     cur = "vw"
     idx += 1
-    chains.append(f"[{cur}]fade=t=out:st={duration - 0.9}:d=0.9,format=yuv420p[vout]")
+    scale = float(os.getenv("TK_SCALE", "1"))
+    sc = f"scale={int(W * scale) // 2 * 2}:{int(H * scale) // 2 * 2}:flags=bilinear," if scale < 0.99 else ""
+    chains.append(f"[{cur}]fade=t=out:st={duration - 0.9}:d=0.9,{sc}format=yuv420p[vout]")
     # audio
     inputs += ["-i", music_path]
     audio_idx = idx
     af = f"[{audio_idx}:a]atrim=0:{duration},afade=t=in:st=0:d=0.6,afade=t=out:st={duration - 1.6}:d=1.6,aformat=sample_rates=44100:channel_layouts=stereo[aout]"
     chains.append(af)
     out = os.path.join(workdir, "taklifnoma.mp4")
-    cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", *inputs,
+    cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-filter_complex_threads", os.getenv("TK_FCT", "0"), *inputs,
            "-filter_complex", ";".join(chains), "-map", "[vout]", "-map", "[aout]",
            "-t", f"{duration}", "-r", str(fps), "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
            "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-c:a", "aac", "-b:a", "128k",
@@ -753,8 +855,8 @@ def render_video(workdir, bg, groups, pal, rng, music_path, seed, duration=DURAT
     if res.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) < 5000:
         raise RuntimeError("ffmpeg xatosi: " + (res.stderr or "")[-600:])
     return out
-
-
+ 
+ 
 def make_invitation(data, workdir, seed, music_path=None, want_video=True, music_seed=None):
     """
     data: {names, date, time, venue, text, lang, palette(None|str|dict), style(None|str)}
@@ -774,10 +876,20 @@ def make_invitation(data, workdir, seed, music_path=None, want_video=True, music
         return None, poster_p, info
     if not music_path:
         music_path = synth_music(os.path.join(workdir, "music.wav"), seed if music_seed is None else music_seed)
-    try:
-        video = render_video(workdir, bg, groups, pal, rng, music_path, seed)
-    except Exception:
-        # tashqi musiqa buzuq bo'lishi mumkin — sintezlangan musiqa bilan qayta urinish
-        music_path = synth_music(os.path.join(workdir, "music_fallback.wav"), seed if music_seed is None else music_seed)
-        video = render_video(workdir, bg, groups, pal, rng, music_path, seed)
+    use_pipe = os.getenv("TK_PIPE", "1") == "1"
+    video = None
+    for attempt in range(3):
+        try:
+            fn = render_video_pipe if (use_pipe and attempt != 2) else render_video
+            video = fn(workdir, bg, groups, pal, rng, music_path, seed)
+            break
+        except Exception:
+            import logging
+            logging.exception("video yasash urinishi %d muvaffaqiyatsiz", attempt + 1)
+            if attempt == 0:
+                # tashqi musiqa buzuq bo'lishi mumkin — sintezlangan musiqa bilan qayta urinish
+                music_path = synth_music(os.path.join(workdir, "music_fallback.wav"), seed if music_seed is None else music_seed)
+            if attempt == 2:
+                raise
     return video, poster_p, info
+ 
