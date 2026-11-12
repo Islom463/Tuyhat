@@ -8,7 +8,7 @@ Muhit o'zgaruvchilari (Render → Environment):
   BOT_TOKEN        - BotFather tokeni (majburiy)
   ADMIN_ID         - admin Telegram ID (bir nechta bo'lsa vergul bilan). To'lov cheklari va zaxira shu yerga keladi
   GROQ_API_KEY     - console.groq.com dan olingan kalit (gsk_...). AI shu bilan ishlaydi
-  PRICE_SINGLE     - ixtiyoriy: 1 ta taklifnoma narxi, standart 150000
+  PRICE_SINGLE     - ixtiyoriy: 1 ta taklifnoma narxi, standart 40000
   PRICE_UNLIMITED  - ixtiyoriy: cheksiz tarif narxi, standart 500000 (eski PRICE nomi ham ishlaydi)
   REGEN_LIMIT      - ixtiyoriy: 1 ta taklifnoma ichida «boshqa dizayn/musiqa» necha marta, standart 5
   ACCESS_DAYS      - ixtiyoriy: obuna muddati (kun). 0 = muddatsiz (standart)
@@ -71,7 +71,7 @@ def _int_env(name, default):
  
  
 ADMIN_IDS = {int(x) for x in re.findall(r"\d+", os.getenv("ADMIN_ID", "") + " " + os.getenv("ADMIN_IDS", ""))}
-PRICE_SINGLE = _int_env("PRICE_SINGLE", 150000)
+PRICE_SINGLE = _int_env("PRICE_SINGLE", 40000)
 PRICE_UNLIMITED = _int_env("PRICE_UNLIMITED", _int_env("PRICE", 500000))
 REGEN_LIMIT = _int_env("REGEN_LIMIT", 5)
 ACCESS_DAYS = _int_env("ACCESS_DAYS", 0)
@@ -2187,4 +2187,3 @@ async def main():
  
 if __name__ == "__main__":
     asyncio.run(main())
- 
