@@ -49,7 +49,8 @@ from aiogram.types import (BufferedInputFile, ErrorEvent, FSInputFile, InlineKey
                            InputMediaDocument, KeyboardButton, ReplyKeyboardMarkup)
  
 import studio
-from texts import LANG_NAMES, LANGS, PALETTE_LABELS, S, TR_LANGS, to_cyrillic, to_latin
+from texts import (COLOR_SWATCHES, LANG_NAMES, LANGS, PALETTE_LABELS, S, STYLE_LABELS, TR_LANGS, swatch_name, to_cyrillic,
+                   to_latin)
 from texts import tr as _tr
  
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -586,13 +587,40 @@ DEFAULT_TEXT = {
 }
  
  
-async def ai_invite_text(names, lang):
+EVENT_KEYS = ("nikoh", "tugilgan", "beshik", "sunnat", "yubiley", "boshqa")
+EVENT_EN = {"nikoh": "wedding", "tugilgan": "birthday party", "beshik": "baby cradle ceremony (Uzbek 'beshik toy')",
+            "sunnat": "sunnat toy (Uzbek boy's circumcision celebration)", "yubiley": "anniversary / jubilee celebration",
+            "boshqa": "celebration"}
+EVENT_DEFAULT_TEXT = {
+    "nikoh": DEFAULT_TEXT,
+    "tugilgan": {"uz": "Sizni tug'ilgan kun bayramimizga taklif etamiz!", "ru": "Приглашаем вас на праздник — день рождения!",
+                 "en": "We would love to celebrate this birthday with you!"},
+    "beshik": {"uz": "Sizni farzandimizning beshik to'yiga taklif etamiz", "ru": "Приглашаем вас на бешик-той нашего малыша",
+               "en": "We invite you to celebrate our baby's cradle ceremony"},
+    "sunnat": {"uz": "Sizni o'g'limizning sunnat to'yiga taklif etamiz", "ru": "Приглашаем вас на суннат-той нашего сына",
+               "en": "We invite you to our son's sunnat celebration"},
+    "yubiley": {"uz": "Sizni yubiley tantanamizga taklif etamiz", "ru": "Приглашаем вас на юбилейное торжество",
+                "en": "We invite you to celebrate this special anniversary with us"},
+    "boshqa": {"uz": "Sizni tadbirimizga taklif etamiz", "ru": "Приглашаем вас на наше мероприятие",
+               "en": "You are warmly invited to our event"},
+}
+ 
+ 
+def default_text(event, lang):
+    d = EVENT_DEFAULT_TEXT.get(event) or EVENT_DEFAULT_TEXT["nikoh"]
+    if lang == "uz_cyrl":
+        return d.get("uz_cyrl") or to_cyrillic(d["uz"])
+    return d[lang]
+ 
+ 
+async def ai_invite_text(names, lang, event="nikoh"):
     target = LANG_DESC["uz" if lang == "uz_cyrl" else lang]
-    msgs = [{"role": "system", "content": "You write short, elegant, warm wedding invitation texts."},
+    what = EVENT_EN.get(event, "celebration")
+    msgs = [{"role": "system", "content": "You write short, elegant, warm invitation texts."},
             {"role": "user", "content": (
-                f"Write a wedding invitation text in {target}, 2 short sentences, at most 150 characters, "
-                f"written from the parents' point of view (inviting guests to their children's wedding). "
-                f"The couple: {names}. Do NOT include date, time, address or the names. "
+                f"Write an invitation text for a {what} in {target}, 2 short sentences, at most 150 characters, "
+                f"from the hosts' point of view (inviting guests). "
+                f"Who it is for: {names}. Do NOT include date, time, address or the names. "
                 f"Output only the text, without quotes.")}]
     out = await groq_chat(msgs, max_tokens=500, temperature=0.8, deadline=30)
     out = out.strip().strip('"«»“”').strip()
@@ -609,7 +637,8 @@ async def ai_design(desc):
                 '(same family, usually a bit darker), accent = ornament color (gold, silver, rose gold...), '
                 'text = main text color with STRONG contrast against the background. '
                 'Styles: mandala = corner flower mandalas, suzani = Uzbek suzani scallops and rosettes, '
-                'arch = mihrab arch, star = islamic star pattern, vine = floral vines.')}]
+                'arch = mihrab arch, star = islamic star pattern, vine = floral vines, marble = minimal corners (best for marble look), '
+                'deco = art deco fans, lattice = geometric circle lattice, floral = flower garlands, moon = crescent moon and stars.')}]
     out = await groq_chat(msgs, max_tokens=400, temperature=0.5, deadline=25)
     data = parse_json(out)
     if not data:
@@ -719,6 +748,11 @@ async def get_image_b64(message):
 # Holatlar (FSM)
 # ============================================================================================
 class Inv(StatesGroup):
+    event = State()
+    bgphoto = State()
+    pattern = State()
+    colors = State()
+    colorhex = State()
     names = State()
     date = State()
     time = State()
@@ -987,9 +1021,28 @@ async def begin_invite(message, state):
         return await message.answer(T(uid, "pay_need") + pay_info_text(uid), reply_markup=pay_kb(uid))
     if uid in BUSY:
         return await message.answer(T(uid, "inv_busy"))
-    await state.set_state(Inv.names)
+    await state.set_state(Inv.event)
     await state.update_data(order={})
-    await message.answer(T(uid, "inv_names"))
+    await message.answer(T(uid, "inv_event"), reply_markup=event_kb(uid))
+ 
+ 
+def event_kb(uid):
+    rows = []
+    for i in range(0, len(EVENT_KEYS), 2):
+        rows.append([btn(T(uid, "ev_" + k), f"ie:{k}") for k in EVENT_KEYS[i:i + 2]])
+    return ikb(rows)
+ 
+ 
+@dp.callback_query(Inv.event, F.data.startswith("ie:"))
+async def inv_event(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    ev = callback.data.split(":")[1]
+    if ev not in EVENT_KEYS:
+        return await callback.answer()
+    await callback.answer()
+    await _store(state, event=ev)
+    await state.set_state(Inv.names)
+    await callback.message.answer(T(uid, "inv_names" if ev == "nikoh" else "inv_names_other"))
  
  
 async def _store(state, **kw):
@@ -1010,8 +1063,9 @@ async def inv_names(message: types.Message, state: FSMContext):
     if _reject_command(message):
         return
     v = clean(message.text, 80)
-    if len(v) < 3:
-        return await message.answer(T(uid, "inv_names"))
+    if len(v) < 2:
+        ev = ((await state.get_data()).get("order") or {}).get("event", "nikoh")
+        return await message.answer(T(uid, "inv_names" if ev == "nikoh" else "inv_names_other"))
     await _store(state, names=v)
     await state.set_state(Inv.date)
     await message.answer(T(uid, "inv_date"))
@@ -1074,6 +1128,7 @@ async def ask_style(chat_id, uid, state):
     await bot.send_message(chat_id, T(uid, "inv_style"), reply_markup=ikb([
         [btn(T(uid, "inv_style_rand"), "is:rand")],
         [btn(T(uid, "inv_style_pal"), "is:pal")],
+        [btn(T(uid, "inv_style_photo"), "is:photo")],
         [btn(T(uid, "inv_style_desc"), "is:desc")]]))
  
  
@@ -1088,12 +1143,12 @@ async def inv_text_mode(callback: types.CallbackQuery, state: FSMContext):
     await bot.send_chat_action(callback.message.chat.id, "typing")
     lang = order.get("lang", "uz")
     try:
-        text = await ai_invite_text(order.get("names", ""), lang)
+        text = await ai_invite_text(order.get("names", ""), lang, order.get("event", "nikoh"))
         if len(text) < 10:
             raise AIError("qisqa")
     except Exception as ex:
         logging.info("AI matn yozolmadi: %s", ex)
-        text = DEFAULT_TEXT[lang]
+        text = default_text(order.get("event", "nikoh"), lang)
     await _store(state, text=text)
     await callback.message.answer(T(uid, "inv_ai_text_used", text=esc(text)))
     await ask_style(callback.message.chat.id, uid, state)
@@ -1131,12 +1186,16 @@ async def inv_style_mode(callback: types.CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
     mode = callback.data.split(":")[1]
     await callback.answer()
+    await _store(state, bg_photo_fid=None, colors={})
     if mode == "rand":
         await _store(state, palette=None, style=None)
         return await ask_music(callback.message.chat.id, uid, state)
     if mode == "pal":
         await state.set_state(Inv.palette)
         return await callback.message.answer(T(uid, "inv_pal"), reply_markup=palette_kb(uid))
+    if mode == "photo":
+        await state.set_state(Inv.bgphoto)
+        return await callback.message.answer(T(uid, "inv_photo_prompt"))
     await state.set_state(Inv.styletext)
     await callback.message.answer(T(uid, "inv_style_text"))
  
@@ -1149,7 +1208,146 @@ async def inv_palette(callback: types.CallbackQuery, state: FSMContext):
         return await callback.answer()
     await callback.answer()
     await _store(state, palette=key, style=None)
-    await ask_music(callback.message.chat.id, uid, state)
+    await ask_pattern(callback.message.chat.id, uid, state)
+ 
+ 
+# ---- rasm orqa fon
+@dp.message(Inv.bgphoto, F.photo | F.document)
+async def inv_photo(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    if message.photo:
+        f = message.photo[-1]
+    elif (message.document.mime_type or "").startswith("image/") and (message.document.file_size or 0) < 15 * 1024 * 1024:
+        f = message.document
+    else:
+        return await message.answer(T(uid, "inv_photo_bad"))
+    await _store(state, bg_photo_fid=f.file_id, palette="qora", style=None, colors={})
+    await ask_pattern(message.chat.id, uid, state)
+ 
+ 
+@dp.message(Inv.bgphoto)
+async def inv_photo_other(message: types.Message):
+    await message.answer(T(message.from_user.id, "inv_photo_bad"))
+ 
+ 
+# ---- naqsh uslubi
+def pattern_kb(uid):
+    labels = STYLE_LABELS[get_lang(uid) or "uz"]
+    rows = [[btn(T(uid, "pat_rand"), "iu:rand")]]
+    keys = list(studio.STYLES)
+    for i in range(0, len(keys), 2):
+        rows.append([btn(labels.get(k, k), f"iu:{k}") for k in keys[i:i + 2]])
+    return ikb(rows)
+ 
+ 
+async def ask_pattern(chat_id, uid, state):
+    await state.set_state(Inv.pattern)
+    await bot.send_message(chat_id, T(uid, "inv_pat"), reply_markup=pattern_kb(uid))
+ 
+ 
+@dp.callback_query(Inv.pattern, F.data.startswith("iu:"))
+async def inv_pattern(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    key = callback.data.split(":")[1]
+    if key != "rand" and key not in studio.STYLES:
+        return await callback.answer()
+    await callback.answer()
+    await _store(state, style=None if key == "rand" else key)
+    await show_colors(callback.message.chat.id, uid, state)
+ 
+ 
+# ---- ranglarni sozlash: fon / naqsh / yozuv / yulduzcha
+ELEMS = ("bg", "ornament", "text", "sparkle")
+ELEM_KEY = {"bg": "col_bg", "ornament": "col_orn", "text": "col_txt", "sparkle": "col_spk"}
+HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
+ 
+ 
+def colors_kb(uid, order):
+    elems = [e for e in ELEMS if not (e == "bg" and order.get("bg_photo_fid"))]
+    rows = [[btn(T(uid, ELEM_KEY[e]), f"cc:{e}") for e in elems[i:i + 2]] for i in range(0, len(elems), 2)]
+    rows.append([btn(T(uid, "col_done"), "cc:done")])
+    return ikb(rows)
+ 
+ 
+def colors_summary(uid, order):
+    cols = order.get("colors") or {}
+    lines = [f"• {T(uid, ELEM_KEY[e])}: <code>#{cols[e]}</code>" for e in ELEMS if cols.get(e)]
+    return "\n".join(lines) if lines else T(uid, "col_none")
+ 
+ 
+async def show_colors(chat_id, uid, state):
+    order = (await state.get_data()).get("order") or {}
+    await state.set_state(Inv.colors)
+    await bot.send_message(chat_id, T(uid, "inv_colors", current=colors_summary(uid, order)), reply_markup=colors_kb(uid, order))
+ 
+ 
+def swatch_kb(uid, elem):
+    lang = get_lang(uid) or "uz"
+    items = list(COLOR_SWATCHES.items())
+    rows = [[btn(f"{sw[0]} {swatch_name(lang, k)}", f"cv:{elem}:{sw[1]}") for k, sw in items[i:i + 3]] for i in range(0, len(items), 3)]
+    rows.append([btn(T(uid, "col_hex_btn"), f"cx:{elem}"), btn(T(uid, "col_reset"), f"cv:{elem}:-")])
+    return ikb(rows)
+ 
+ 
+@dp.callback_query(Inv.colors, F.data.startswith("cc:"))
+async def inv_colors_pick(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    elem = callback.data.split(":")[1]
+    await callback.answer()
+    if elem == "done":
+        return await ask_music(callback.message.chat.id, uid, state)
+    if elem not in ELEMS:
+        return
+    await callback.message.answer(T(uid, "col_pick", elem=T(uid, ELEM_KEY[elem])), reply_markup=swatch_kb(uid, elem))
+ 
+ 
+@dp.callback_query(Inv.colors, F.data.startswith("cv:"))
+async def inv_colors_set(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    _, elem, val = callback.data.split(":")
+    if elem not in ELEMS:
+        return await callback.answer()
+    await callback.answer()
+    order = (await state.get_data()).get("order") or {}
+    cols = dict(order.get("colors") or {})
+    if val == "-":
+        cols.pop(elem, None)
+    elif HEX_RE.match(val):
+        cols[elem] = val.lower()
+    await _store(state, colors=cols)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await show_colors(callback.message.chat.id, uid, state)
+ 
+ 
+@dp.callback_query(Inv.colors, F.data.startswith("cx:"))
+async def inv_colors_hex(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    elem = callback.data.split(":")[1]
+    if elem not in ELEMS:
+        return await callback.answer()
+    await callback.answer()
+    await state.set_state(Inv.colorhex)
+    await state.update_data(color_elem=elem)
+    await callback.message.answer(T(uid, "col_hex_prompt"))
+ 
+ 
+@dp.message(Inv.colorhex, F.text)
+async def inv_colors_hex_msg(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    mt = HEX_RE.match((message.text or "").strip())
+    if not mt:
+        return await message.answer(T(uid, "col_hex_bad"))
+    data = await state.get_data()
+    elem = data.get("color_elem")
+    order = data.get("order") or {}
+    cols = dict(order.get("colors") or {})
+    if elem in ELEMS:
+        cols[elem] = mt.group(1).lower()
+    await _store(state, colors=cols)
+    await show_colors(message.chat.id, uid, state)
  
  
 @dp.message(Inv.styletext, F.text)
@@ -1209,7 +1407,8 @@ def make_studio_data(order):
             fields[k] = to_cyrillic(v)
         elif lang == "uz" and _CYR.search(v):
             fields[k] = to_latin(v)
-    return {**fields, "lang": lang, "palette": order.get("palette"), "style": order.get("style")}
+    return {**fields, "lang": lang, "palette": order.get("palette"), "style": order.get("style"),
+            "event": order.get("event", "nikoh"), "colors": order.get("colors") or None}
  
  
 async def pick_music_file(workdir, order, music_seed):
@@ -1239,7 +1438,7 @@ async def start_generation(chat_id, uid, order, new_design=False, new_music=Fals
     order.setdefault("music_seed", order["seed"])
     if new_design:
         order["seed"] = random.randint(1, 10 ** 9)
-        order["palette"], order["style"] = None, None
+        order["palette"], order["style"], order["colors"] = None, None, {}
     if new_music:
         order["music_seed"] = random.randint(1, 10 ** 9)
     charged = delivered = False
@@ -1266,6 +1465,13 @@ async def start_generation(chat_id, uid, order, new_design=False, new_music=Fals
                 workdir = tempfile.mkdtemp(prefix="tk_")
                 sdata = make_studio_data(order)
                 music = await pick_music_file(workdir, order, order["music_seed"])
+                if order.get("bg_photo_fid"):
+                    photo_path = os.path.join(workdir, "bg_photo")
+                    try:
+                        await bot.download(order["bg_photo_fid"], destination=photo_path)
+                        sdata["bg_photo"] = photo_path
+                    except Exception as ex:
+                        logging.info("orqa fon rasmi yuklanmadi: %s", ex)
                 novideo = False
                 try:
                     video, poster, _info = await asyncio.to_thread(
@@ -1338,9 +1544,9 @@ async def inv_new_cb(callback: types.CallbackQuery, state: FSMContext):
         return await callback.message.answer(T(uid, "pay_need") + pay_info_text(uid), reply_markup=pay_kb(uid))
     if uid in BUSY:
         return await callback.message.answer(T(uid, "inv_busy"))
-    await state.set_state(Inv.names)
+    await state.set_state(Inv.event)
     await state.update_data(order={})
-    await callback.message.answer(T(uid, "inv_names"))
+    await callback.message.answer(T(uid, "inv_event"), reply_markup=event_kb(uid))
  
  
 # ============================================================================================
