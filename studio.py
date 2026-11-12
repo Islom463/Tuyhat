@@ -21,9 +21,10 @@ import tempfile
 import zlib
  
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
  
 from fontdata import FONTS_B64Z
+from texts import to_cyrillic
  
 # ----------------------------------------------------------------------------------------------
 # Umumiy o'lchamlar
@@ -88,24 +89,84 @@ PALETTES = {
     "pushti":   ("#fff3f4", "#f6d4da", "#c98591", "#5b2a37", "#8c4f5f"),
     "osmon":    ("#f6f8fc", "#d6e1ef", "#6f8fb6", "#22344f", "#4f6a8d"),
     "shalfey":  ("#f3f6ee", "#d8e2cc", "#7e9a63", "#2f3f27", "#5d7447"),
+    # --- marmar va boshqa yangi ranglar
+    "zumrad_marmar": ("#0b4a36", "#03150f", "#e4c47d", "#f6efd9", "#e4c47d"),
+    "bordo_marmar":  ("#6a1022", "#1d0408", "#e9c9b5", "#fbeee6", "#e9c9b5"),
+    "qora_marmar":   ("#1a1d26", "#050608", "#d9ae52", "#f8f0dc", "#d9ae52"),
+    "shampan":       ("#b89d82", "#8c725a", "#f0d9a0", "#fff6e2", "#f3e3bd"),
+    "oq_marmar":     ("#f7f7f5", "#d8d8d4", "#b8903c", "#1f1f22", "#6b5a2f"),
+    "lava":          ("#1a0a0a", "#050202", "#e8b86a", "#f9efe0", "#e8b86a"),
+    "shokolad":      ("#4a3023", "#1d110a", "#c3a672", "#f3e6cf", "#c3a672"),
+    "quyosh":        ("#d9680f", "#4a1505", "#ffe0a0", "#fff7e6", "#ffe0a0"),
+    "royal":         ("#13244a", "#060d1f", "#cfd8ea", "#f5f8ff", "#cfd8ea"),
+    "rozagul":       ("#4a2530", "#1c0c12", "#eab8a4", "#fdf0ea", "#eab8a4"),
+    "zaytun":        ("#454a2a", "#1c2010", "#d8c88a", "#f6f2dc", "#d8c88a"),
+    "kumush":        ("#2b2f38", "#0b0d11", "#cdd3dd", "#f3f5f8", "#b9c0cc"),
+}
+# tekstura: marmar tomirlari rangi (+ ikkinchi tomir rangi) yoki qog'oz
+TEXTURES = {
+    "zumrad_marmar": ("marble", "#e4c47d", None), "bordo_marmar": ("marble", "#f1cdbd", "#e4c47d"),
+    "qora_marmar": ("marble", "#d9ae52", None), "shampan": ("marble", "#f2dca4", None),
+    "oq_marmar": ("marble", "#2b2b2f", "#c9a24a"), "lava": ("marble", "#ff3b22", "#e8b86a"),
+    "shokolad": ("paper", None, None),
 }
 PALETTE_ALIASES = {
     "bordo": "bordo", "burgundy": "bordo", "qizil": "bordo", "red": "bordo", "wine": "bordo",
     "zumrad": "zumrad", "yashil": "zumrad", "green": "zumrad", "emerald": "zumrad",
     "qora": "qora", "black": "qora", "dark": "qora",
     "binafsha": "binafsha", "purple": "binafsha", "violet": "binafsha",
-    "kobalt": "kobalt", "ko'k": "kobalt", "blue": "kobalt", "navy": "kobalt",
+    "kobalt": "kobalt", "ko'k": "kobalt", "blue": "kobalt", "navy": "royal",
     "firuza": "firuza", "turquoise": "firuza", "teal": "firuza",
     "krem": "krem", "cream": "krem", "oltin": "krem", "gold": "krem", "beige": "krem",
-    "pushti": "pushti", "pink": "pushti", "rose": "pushti",
+    "pushti": "pushti", "pink": "pushti", "rose": "rozagul",
     "osmon": "osmon", "sky": "osmon", "light blue": "osmon",
-    "shalfey": "shalfey", "olive": "shalfey", "sage": "shalfey",
+    "shalfey": "shalfey", "olive": "zaytun", "sage": "shalfey",
+    "marmar": "qora_marmar", "marble": "qora_marmar", "chocolate": "shokolad", "brown": "shokolad",
+    "sunset": "quyosh", "orange": "quyosh", "silver": "kumush", "royal": "royal",
 }
-STYLES = ("mandala", "suzani", "arch", "star", "vine")
+STYLES = ("mandala", "suzani", "arch", "star", "vine", "marble", "deco", "lattice", "floral", "moon")
  
  
-def resolve_palette(spec, rng):
-    """spec: palitra nomi (str), {'bg1','bg2','accent','text'} (hex) yoki None (tasodifiy)."""
+def _mix(a, b, k):
+    return tuple(int(round(x * (1 - k) + y * k)) for x, y in zip(a, b))
+ 
+ 
+def _apply_colors(pal, colors):
+    """Foydalanuvchi sozlagan ranglar: bg (fon), ornament (naqsh), text (yozuv), sparkle (yulduzcha)."""
+    if not colors:
+        return pal
+    def get(k):
+        v = colors.get(k)
+        try:
+            return _rgb(v) if v else None
+        except Exception:
+            return None
+    bg, orn, txt, spk = get("bg"), get("ornament"), get("text"), get("sparkle")
+    if bg:
+        light = _lum(bg) > 0.6
+        pal["bg1"] = bg
+        pal["bg2"] = _mix(bg, (0, 0, 0), 0.12 if light else 0.58)
+        pal["light"] = light
+        if "texture_base" in pal:
+            pal["texture_base"] = bg
+        if not txt and abs(_lum(pal["txt"]) - _lum(bg)) < 0.45:
+            txt = (35, 30, 28) if light else (250, 245, 235)
+    if orn:
+        pal["acc"] = orn
+        if pal.get("vein"):
+            pal["vein"] = orn
+    if txt:
+        pal["txt"] = txt
+    if txt or orn:
+        pal["sub"] = _mix(pal["acc"], pal["txt"], 0.45)
+    if spk:
+        pal["spark"] = spk
+    return pal
+ 
+ 
+def resolve_palette(spec, rng, colors=None):
+    """spec: palitra nomi (str), {'bg1','bg2','accent','text'} (hex) yoki None (tasodifiy). colors: alohida rang sozlamalari."""
+    pal = None
     if isinstance(spec, dict):
         try:
             bg1, bg2, acc = _rgb(spec["bg1"]), _rgb(spec.get("bg2") or spec["bg1"]), _rgb(spec["accent"])
@@ -116,18 +177,25 @@ def resolve_palette(spec, rng):
             sub = tuple(int(0.55 * a + 0.45 * t) for a, t in zip(acc, txt))
             if abs(_lum(acc) - _lum(bg1)) < 0.18:                       # aksent fonga qo'shilib ketmasin
                 acc = (110, 80, 40) if light else (225, 195, 120)
-            return {"bg1": bg1, "bg2": bg2, "acc": acc, "txt": txt, "sub": sub, "light": light}
+            pal = {"bg1": bg1, "bg2": bg2, "acc": acc, "txt": txt, "sub": sub, "light": light, "name": "custom"}
         except Exception:
             spec = None
-    if isinstance(spec, str):
-        key = PALETTE_ALIASES.get(spec.strip().lower(), spec.strip().lower())
-        if key not in PALETTES:
-            key = None
-        spec = key
-    if not spec:
-        spec = rng.choice(list(PALETTES))
-    bg1, bg2, acc, txt, sub = [_rgb(x) for x in PALETTES[spec]]
-    return {"bg1": bg1, "bg2": bg2, "acc": acc, "txt": txt, "sub": sub, "light": _lum(bg1) > 0.6, "name": spec}
+    if pal is None:
+        if isinstance(spec, str):
+            key = PALETTE_ALIASES.get(spec.strip().lower(), spec.strip().lower())
+            spec = key if key in PALETTES else None
+        if not spec:
+            spec = rng.choice(list(PALETTES))
+        bg1, bg2, acc, txt, sub = [_rgb(x) for x in PALETTES[spec]]
+        pal = {"bg1": bg1, "bg2": bg2, "acc": acc, "txt": txt, "sub": sub, "light": _lum(bg1) > 0.6, "name": spec}
+        tex = TEXTURES.get(spec)
+        if tex:
+            pal["texture"] = tex[0]
+            if tex[1]:
+                pal["vein"] = _rgb(tex[1])
+            if tex[2]:
+                pal["vein2"] = _rgb(tex[2])
+    return _apply_colors(pal, colors)
  
  
 # ----------------------------------------------------------------------------------------------
@@ -248,8 +316,130 @@ def gradient_bg(pal):
     return Image.fromarray(img, "RGB")
  
  
-def build_background(pal, style, rng):
-    base = gradient_bg(pal).convert("RGBA")
+def _noise(w, h, cells_x, rng_np):
+    """Silliq tasodifiy shovqin (past o'lchamdagi tasodifiy to'rdan kattalashtirib)."""
+    cy = max(2, int(cells_x * h / w))
+    arr = (rng_np.random((cy + 1, cells_x + 1)) * 255).astype(np.uint8)
+    return np.asarray(Image.fromarray(arr).resize((w, h), Image.BICUBIC), dtype=np.float32) / 255.0
+ 
+ 
+def marble_background(pal, seed, w=None, h=None):
+    """Protsedura bilan chizilgan marmar: yuqori-past gradient + bulutsimon sayqal + diagonal tomirlar."""
+    w, h = w or BW, h or BH
+    rng_np = np.random.default_rng(seed)
+    r = random.Random(seed)
+    n1, n2, n3, n4 = (_noise(w, h, c, rng_np) for c in (3, 6, 14, 32))
+    X = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    Y = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    c1 = np.array(pal["bg1"], np.float32)[None, None, :]
+    c2 = np.array(pal["bg2"], np.float32)[None, None, :]
+    base = c1 * (1 - Y[..., None]) + c2 * Y[..., None]
+    cloud = (n1 * 0.55 + n2 * 0.45)[..., None]
+    base = base * (0.82 + 0.36 * cloud)
+    ang = r.uniform(0.55, 1.0)
+    dA = X * math.cos(ang) + Y * math.sin(ang) * (h / w)
+    angB = ang + r.uniform(1.0, 1.5)
+    dB = X * math.cos(angB) + Y * math.sin(angB) * (h / w)
+ 
+    def field(a_, b_, c_, dd, k):
+        f_ = a_ * 0.45 + b_ * 0.40 + c_ * 0.22 + n4 * 0.07 + dd * k
+        return (f_ - f_.min()) / (f_.max() - f_.min())
+ 
+    fA = field(n1, n2, n3, dA, 2.6)          # asosiy yo'nalish: uzun diagonal "yoriqlar"
+    fB = field(n2, n3, n1, dB, 2.2)          # kesishuvchi ingichka tomirlar
+ 
+    def line(f_, level, width):
+        return np.exp(-((f_ - level) / width) ** 2)
+ 
+    brk = 0.30 + 1.0 * n4                    # tomirlar uzilib-uzilib ko'rinsin
+    mask = np.zeros_like(fA)
+    for lv in np.linspace(0.10, 0.92, 5):    # asosiy tomirlar
+        mask += line(fA, lv + r.uniform(-0.05, 0.05), 0.0034) * (0.55 + 0.8 * n2)
+    for lv in np.linspace(0.05, 0.97, 11):   # ingichka tomirlar
+        mask += line(fA, lv + r.uniform(-0.04, 0.04), 0.0018) * brk * 0.55
+    for lv in (0.2, 0.45, 0.7, 0.9):         # kesishuvchi
+        mask += line(fB, lv + r.uniform(-0.05, 0.05), 0.0016) * brk * 0.5
+    mask = np.clip(mask, 0, 1)
+    glow = np.asarray(Image.fromarray((mask * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.6)), np.float32) / 255.0
+    mask = np.clip(mask + glow * 0.40, 0, 1)[..., None]
+    vein_c = np.array(pal.get("vein") or pal["acc"], np.float32)[None, None, :]
+    out = base * (1 - mask * 0.92) + vein_c * mask * 0.92
+    if pal.get("vein2") is not None:                       # ikkinchi (oltin) ingichka tomirlar
+        m2 = np.clip(line(fA, 0.38 + r.uniform(-0.04, 0.04), 0.0022) * (0.45 + 0.9 * n3) + line(fA, 0.77, 0.0022) * (0.3 + 0.8 * n4), 0, 1)[..., None]
+        out = out * (1 - m2 * 0.85) + np.array(pal["vein2"], np.float32)[None, None, :] * m2 * 0.85
+    out = out + np.random.default_rng(seed + 1).normal(0, 0.45, (h, w, 1)).astype(np.float32)
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+ 
+ 
+def paper_background(pal):
+    """Gradient + qalin qog'oz (kartonsimon) donadorligi."""
+    img = np.asarray(gradient_bg(pal), np.float32)
+    g = np.random.default_rng(11)
+    grain = _noise(BW, BH, 220, g) - 0.5
+    fib = _noise(BW, BH, 40, g) - 0.5
+    img = img + (grain * 14 + fib * 6)[..., None]
+    return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8), "RGB")
+ 
+ 
+def photo_background(path, pal):
+    """Foydalanuvchi rasmi: to'ldirib qirqiladi, biroz xiralashtiriladi va matn o'qilishi uchun qoraytiriladi."""
+    im = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+    sw, sh = im.size
+    k = max(BW / sw, BH / sh)
+    im = im.resize((max(BW, int(sw * k + 1)), max(BH, int(sh * k + 1))), Image.LANCZOS)
+    x0, y0 = (im.width - BW) // 2, (im.height - BH) // 2
+    im = im.crop((x0, y0, x0 + BW, y0 + BH)).filter(ImageFilter.GaussianBlur(1.6))
+    arr = np.asarray(im, np.float32)
+    Y = np.linspace(0, 1, BH, dtype=np.float32)[:, None, None]
+    shade = 0.46 + 0.20 * (np.abs(Y - 0.5) * 2) ** 1.4          # markaz (matn) qoraroq, chetlar yorug'roq
+    tint = np.array(pal["bg2"], np.float32)[None, None, :]
+    arr = arr * shade + tint * 0.20
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
+ 
+ 
+def vine2(d, x0, y0, x1, y1, amp, waves, col, lw, leaf_len, rng):
+    """Istalgan yo'nalishdagi to'lqinsimon shoxcha (barglar bilan) — gulchambar."""
+    dx, dy = x1 - x0, y1 - y0
+    ln = math.hypot(dx, dy)
+    nx, ny = -dy / ln, dx / ln
+    steps = 160
+    pts = []
+    for i in range(steps + 1):
+        t = i / steps
+        off = amp * math.sin(2 * math.pi * waves * t)
+        pts.append((x0 + dx * t + nx * off, y0 + dy * t + ny * off))
+    d.line(pts, fill=col, width=lw, joint="curve")
+    for i in range(5, steps - 3, 8):
+        (xa, ya), (xb, yb) = pts[i], pts[i + 2]
+        base = math.atan2(yb - ya, xb - xa)
+        for sgn in (-1, 1):
+            leaf(d, xa, ya, base + sgn * 0.9, leaf_len * (0.8 + 0.4 * rng.random()), leaf_len * 0.36, col, max(1, lw - 1))
+    for i in range(14, steps - 10, 26):
+        x, y = pts[i]
+        rr = leaf_len * 0.16
+        d.ellipse((x - rr, y - rr, x + rr, y + rr), fill=col)
+ 
+ 
+def crescent(d, cx, cy, r, col):
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=col)
+    d.ellipse((cx - r * 0.62, cy - r * 1.12, cx + r * 1.38, cy + r * 0.88), fill=(0, 0, 0, 0))
+ 
+ 
+def star4(d, x, y, r, col):
+    pts = [(x, y - r * 2.0), (x + r * 0.45, y - r * 0.45), (x + r * 2.0, y), (x + r * 0.45, y + r * 0.45),
+           (x, y + r * 2.0), (x - r * 0.45, y + r * 0.45), (x - r * 2.0, y), (x - r * 0.45, y - r * 0.45)]
+    d.polygon(pts, fill=col)
+ 
+ 
+def build_background(pal, style, rng, photo=None, seed=1):
+    if photo:
+        base = photo_background(photo, pal).convert("RGBA")
+    elif pal.get("texture") == "marble":
+        base = marble_background(pal, seed).convert("RGBA")
+    elif pal.get("texture") == "paper":
+        base = paper_background(pal).convert("RGBA")
+    else:
+        base = gradient_bg(pal).convert("RGBA")
     layer = Image.new("RGBA", (BW * SS, BH * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     acc = pal["acc"]
@@ -335,6 +525,61 @@ def build_background(pal, style, rng):
         for x in (W / 2,):
             star8(d, *P(x, 108), _s(34), strong, lw)
             star8(d, *P(x, H - 108), _s(34), strong, lw)
+    elif style == "marble":
+        # minimal: burchak qavslari + markaziy romblar (marmar fonni bezamaydi)
+        for (cx, cy, sx, sy) in ((0, 0, 1, 1), (W, 0, -1, 1), (0, H, 1, -1), (W, H, -1, -1)):
+            x0, y0 = cx + sx * 66, cy + sy * 66
+            d.line([P(x0, y0 + sy * 70), P(x0, y0), P(x0 + sx * 70, y0)], fill=strong, width=lw + 1)
+            diamond(d, *P(x0 + sx * 12, y0 + sy * 12), _s(5), strong)
+        diamond(d, *P(W / 2, 66), _s(8), strong)
+        diamond(d, *P(W / 2, H - 66), _s(8), strong)
+    elif style == "deco":
+        cx = W / 2
+        for (cy, a0, a1) in ((58, 0, 180), (H - 58, 180, 360)):
+            for rr in range(36, 160, 22):
+                d.arc((_s(cx - rr + px), _s(cy - rr + py), _s(cx + rr + px), _s(cy + rr + py)), a0, a1, fill=strong if rr % 44 == 36 else mid, width=lw)
+            for ang in range(12, 180, 12):
+                a = math.radians(ang if cy < H / 2 else -ang)
+                d.line([P(cx + 36 * math.cos(a), cy + 36 * math.sin(a)), P(cx + 146 * math.cos(a), cy + 146 * math.sin(a))], fill=mid, width=lw)
+        for sx in (84, W - 84):
+            d.line([P(sx, 250), P(sx, H - 250)], fill=mid, width=lw)
+            d.line([P(sx + (12 if sx < W / 2 else -12), 270), P(sx + (12 if sx < W / 2 else -12), H - 270)], fill=soft, width=lw)
+            for yy in (250, H - 250):
+                diamond(d, *P(sx, yy), _s(7), strong)
+    elif style == "lattice":
+        r0 = rng.choice([58, 70])
+        hstep = r0 * math.sqrt(3) / 2
+        j = -1
+        while j * hstep < H + r0:
+            i = -1
+            while i * r0 < W + r0:
+                cx = i * r0 + (r0 / 2 if j % 2 else 0)
+                d.ellipse((_s(cx - r0 + px), _s(j * hstep - r0 + py), _s(cx + r0 + px), _s(j * hstep + r0 + py)), outline=faint, width=lw)
+                i += 1
+            j += 1
+        for c in corner_pair:
+            cx, cy = corner_xy(c)
+            rosette(d, *P(cx, cy), _s(rng.randint(110, 140)), 12, strong, lw, rings=3, rot=0.2)
+    elif style == "floral":
+        vine2(d, *P(84, 98), *P(W - 84, 98), _s(15), 5.5, mid, lw, _s(22), rng)
+        vine2(d, *P(84, H - 98), *P(W - 84, H - 98), _s(15), 5.5, mid, lw, _s(22), rng)
+        for (x, y) in ((84, 98), (W - 84, 98), (84, H - 98), (W - 84, H - 98)):
+            rosette(d, *P(x, y), _s(rng.randint(34, 44)), 8, strong, lw, rings=3, rot=rng.random())
+        rosette(d, *P(W / 2, 98), _s(30), 10, strong, lw, rings=2)
+        rosette(d, *P(W / 2, H - 98), _s(30), 10, strong, lw, rings=2)
+    elif style == "moon":
+        crescent(d, *P(W / 2, 130), _s(48), strong)
+        for _ in range(16):
+            sx_, sy_ = rng.randint(80, W - 80), rng.randint(70, 360)
+            if abs(sx_ - W / 2) < 90 and sy_ < 200:
+                continue
+            star4(d, *P(sx_, sy_), _s(rng.choice([2, 3, 4])), mid)
+        for _ in range(8):
+            sx_, sy_ = rng.randint(80, W - 80), rng.randint(H - 330, H - 70)
+            star4(d, *P(sx_, sy_), _s(rng.choice([2, 3])), soft)
+        for c in ("bl", "br"):
+            cxy = corner_xy(c)
+            rosette(d, *P(cxy[0] + (70 if c == "bl" else -70), cxy[1] - 70), _s(42), 8, mid, lw, rings=2, dots=False)
     else:  # vine
         for sx, side in ((92, 1), (W - 92, -1)):
             vine(d, *P(sx, 120), *P(sx + side * 6, H - 120), _s(30), 3.0, mid, lw, _s(26), rng, side=side)
@@ -406,7 +651,42 @@ LABELS = {
     "ru": {"head": "ПРИГЛАШЕНИЕ НА СВАДЬБУ", "venue": "МЕСТО", "at": "в {t}"},
     "en": {"head": "WEDDING INVITATION", "venue": "VENUE", "at": "at {t}"},
 }
-AND = {"uz": "&", "uz_cyrl": "&", "ru": "&", "en": "&"}
+EVENT_HEAD = {
+    "nikoh": {"uz": "TO'YGA TAKLIF", "ru": "ПРИГЛАШЕНИЕ НА СВАДЬБУ", "en": "WEDDING INVITATION"},
+    "tugilgan": {"uz": "TUG'ILGAN KUNGA TAKLIF", "ru": "ПРИГЛАШЕНИЕ НА ДЕНЬ РОЖДЕНИЯ", "en": "BIRTHDAY INVITATION"},
+    "beshik": {"uz": "BESHIK TO'YIGA TAKLIF", "ru": "ПРИГЛАШЕНИЕ НА БЕШИК-ТОЙ", "en": "BABY CRADLE CEREMONY"},
+    "sunnat": {"uz": "SUNNAT TO'YIGA TAKLIF", "ru": "ПРИГЛАШЕНИЕ НА СУННАТ-ТОЙ", "en": "SUNNAT CEREMONY INVITATION"},
+    "yubiley": {"uz": "YUBILEYGA TAKLIF", "ru": "ПРИГЛАШЕНИЕ НА ЮБИЛЕЙ", "en": "ANNIVERSARY INVITATION"},
+    "boshqa": {"uz": "TADBIRGA TAKLIF", "ru": "ПРИГЛАШЕНИЕ НА ТОРЖЕСТВО", "en": "YOU ARE INVITED"},
+}
+ 
+ 
+def event_head(event, lang):
+    heads = EVENT_HEAD.get(event) or EVENT_HEAD["nikoh"]
+    if lang == "uz_cyrl":
+        return to_cyrillic(heads["uz"])
+    return heads.get(lang) or heads["uz"]
+ 
+ 
+def with_shadow(im, radius=6, strength=0.9):
+    """Matn ostiga yumshoq soya qo'shadi (rasmli fonda o'qilishi uchun)."""
+    a = im.getchannel("A")
+    blurred = a.filter(ImageFilter.GaussianBlur(radius)).point(lambda v: int(min(255, v * strength * 1.7)))
+    sh = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    sh.putalpha(blurred)
+    return Image.alpha_composite(sh, im)
+ 
+ 
+def force_light_text(pal):
+    """Rasmli fonda matn doim och rangda bo'lsin."""
+    pal = dict(pal)
+    pal["txt"] = (250, 245, 235)
+    if _lum(pal["acc"]) < 0.45:
+        pal["acc"] = (225, 195, 120)
+    pal["sub"] = _mix(pal["acc"], pal["txt"], 0.45)
+    pal["light"] = False
+    return pal
+ 
  
  
 def split_names(raw):
@@ -428,8 +708,12 @@ def build_groups(data, pal, style=None):
         return Image.new("RGBA", (W, h), (0, 0, 0, 0))
  
     # 1) sarlavha + bezak chizig'i
-    head = fix_uz_quotes(lab["head"], lang)
-    fh = font("inter_sb", 25 if len(head) < 18 else 21)
+    head = fix_uz_quotes(event_head(data.get("event", "nikoh"), lang), lang)
+    fsz = 25 if len(head) < 18 else 21
+    fh = font("inter_sb", fsz)
+    while tracked_width(_sd, head, fh, 5) > 560 and fsz > 14:
+        fsz -= 1
+        fh = font("inter_sb", fsz)
     tw = tracked_width(_sd, head, fh, 5)
     im = layer(70)
     d = ImageDraw.Draw(im)
@@ -508,8 +792,8 @@ def build_groups(data, pal, style=None):
     groups.append({"im": im, "h": hh, "gap": 0, "t": 5.8, "d": 1.4})
  
     # joylashuv: vertikal markazlash
-    top_min = 238 if style == "arch" else 150
-    bottom_max = 1118 if style == "arch" else 1160
+    top_min = {"arch": 238, "moon": 228, "deco": 212}.get(style, 150)
+    bottom_max = {"arch": 1118, "deco": 1070}.get(style, 1160)
     avail = bottom_max - top_min
     hs = sum(g["h"] for g in groups)
     gaps = sum(g["gap"] for g in groups[:-1]) or 1
@@ -523,6 +807,8 @@ def build_groups(data, pal, style=None):
     for g in groups:
         g["y"] = y
         y += g["h"] + g["gap"]
+        if data.get("bg_photo"):
+            g["im"] = with_shadow(g["im"])
     return groups
  
  
@@ -544,7 +830,7 @@ def make_sparkles(pal, rng):
     """720x2560 (ikki bir xil yarim) — vertikal siljib, uzluksiz ko'rinadi."""
     half = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(half)
-    col = pal["acc"] if pal["light"] else tuple(min(255, int(c * 0.6 + 120)) for c in pal["acc"])
+    col = pal.get("spark") or (pal["acc"] if pal["light"] else tuple(min(255, int(c * 0.6 + 120)) for c in pal["acc"]))
     for _ in range(46):
         x, y = rng.randint(30, W - 30), rng.randint(0, H - 1)
         r = rng.choice([2, 2, 3, 3, 4, 6])
@@ -563,7 +849,7 @@ def make_sparkles(pal, rng):
  
 def make_sparkle_sprites(pal, rng, n=46):
     """Yaltiroqlar kichik rasmcha (sprite) ko'rinishida: [(x, y, RGBA massiv), ...] — xotirani tejaydi."""
-    col = pal["acc"] if pal["light"] else tuple(min(255, int(c * 0.6 + 120)) for c in pal["acc"])
+    col = pal.get("spark") or (pal["acc"] if pal["light"] else tuple(min(255, int(c * 0.6 + 120)) for c in pal["acc"]))
     out = []
     for _ in range(n):
         x, y = rng.randint(30, W - 30), rng.randint(0, H - 1)
@@ -863,9 +1149,11 @@ def make_invitation(data, workdir, seed, music_path=None, want_video=True, music
     Qaytaradi: (video_path | None, poster_path, info)   info = {"palette": ..., "style": ...}
     """
     rng = random.Random(seed)
-    pal = resolve_palette(data.get("palette"), rng)
+    pal = resolve_palette(data.get("palette"), rng, data.get("colors"))
+    if data.get("bg_photo"):
+        pal = force_light_text(pal)
     style = data.get("style") if data.get("style") in STYLES else rng.choice(STYLES)
-    bg = build_background(pal, style, rng)
+    bg = build_background(pal, style, rng, photo=data.get("bg_photo"), seed=seed)
     groups = build_groups(data, pal, style)
     os.makedirs(workdir, exist_ok=True)
     poster = compose_poster(bg, groups)
@@ -892,4 +1180,3 @@ def make_invitation(data, workdir, seed, music_path=None, want_video=True, music
             if attempt == 2:
                 raise
     return video, poster_p, info
- 
