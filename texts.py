@@ -416,6 +416,92 @@ S["en"].update({
                   "The limit resets tomorrow."),
 })
  
+# ---- Dizayn sozlamalari: tadbir turi, naqsh, rasmli fon, ranglarni sozlash
+STYLE_LABELS = {
+    "uz": {"mandala": "🌸 Mandala", "suzani": "🧵 Suzani", "arch": "🕌 Mihrob", "star": "✴️ Yulduz to'ri", "vine": "🌿 O'simlik",
+           "marble": "◽ Minimal", "deco": "🏛 Art-deko", "lattice": "⚜️ Girih to'ri", "floral": "💐 Gulchambar", "moon": "🌙 Oy va yulduz"},
+    "ru": {"mandala": "🌸 Мандала", "suzani": "🧵 Сюзане", "arch": "🕌 Михраб", "star": "✴️ Сетка звёзд", "vine": "🌿 Растения",
+           "marble": "◽ Минимализм", "deco": "🏛 Ар-деко", "lattice": "⚜️ Гирих", "floral": "💐 Гирлянда", "moon": "🌙 Луна и звёзды"},
+    "en": {"mandala": "🌸 Mandala", "suzani": "🧵 Suzani", "arch": "🕌 Mihrab arch", "star": "✴️ Star lattice", "vine": "🌿 Vines",
+           "marble": "◽ Minimal", "deco": "🏛 Art deco", "lattice": "⚜️ Girih lattice", "floral": "💐 Garland", "moon": "🌙 Moon & stars"},
+}
+PALETTE_LABELS["uz"].update({"zumrad_marmar": "💎 Zumrad marmar", "bordo_marmar": "🍷 Bordo marmar", "qora_marmar": "🖤 Qora marmar",
+                             "shampan": "🥂 Shampan", "oq_marmar": "🤍 Oq marmar", "lava": "🌋 Lava qizil", "shokolad": "🍫 Shokolad",
+                             "quyosh": "🌅 Quyosh", "royal": "👑 Qirollik ko'k", "rozagul": "🌹 Pushti-oltin", "zaytun": "🫒 Zaytun",
+                             "kumush": "🩶 Kumush"})
+PALETTE_LABELS["ru"].update({"zumrad_marmar": "💎 Изумрудный мрамор", "bordo_marmar": "🍷 Бордовый мрамор", "qora_marmar": "🖤 Чёрный мрамор",
+                             "shampan": "🥂 Шампань", "oq_marmar": "🤍 Белый мрамор", "lava": "🌋 Красная лава", "shokolad": "🍫 Шоколад",
+                             "quyosh": "🌅 Закат", "royal": "👑 Королевский синий", "rozagul": "🌹 Розовое золото", "zaytun": "🫒 Оливковый",
+                             "kumush": "🩶 Серебро"})
+PALETTE_LABELS["en"].update({"zumrad_marmar": "💎 Emerald marble", "bordo_marmar": "🍷 Burgundy marble", "qora_marmar": "🖤 Midnight marble",
+                             "shampan": "🥂 Champagne", "oq_marmar": "🤍 White marble", "lava": "🌋 Lava red", "shokolad": "🍫 Chocolate",
+                             "quyosh": "🌅 Sunset", "royal": "👑 Royal blue", "rozagul": "🌹 Rose gold", "zaytun": "🫒 Olive",
+                             "kumush": "🩶 Silver"})
+ 
+# rang tanlash katakchalari: kalit -> (emoji, hex, uz, ru, en)
+COLOR_SWATCHES = {
+    "gold": ("🟡", "d8b66f", "Oltin", "Золото", "Gold"), "silver": ("🩶", "cfd6e0", "Kumush", "Серебро", "Silver"),
+    "rose": ("🌹", "e8b4a0", "Pushti-oltin", "Розовое золото", "Rose gold"), "white": ("⬜", "ffffff", "Oq", "Белый", "White"),
+    "cream": ("🤍", "fbf3e6", "Krem", "Кремовый", "Cream"), "black": ("⬛", "111111", "Qora", "Чёрный", "Black"),
+    "chocolate": ("🟫", "5a3a22", "Shokolad", "Шоколад", "Chocolate"), "red": ("🟥", "b3122e", "Qizil", "Красный", "Red"),
+    "burgundy": ("🍷", "6b1d34", "Bordo", "Бордо", "Burgundy"), "emerald": ("🟩", "0f5c44", "Zumrad", "Изумруд", "Emerald"),
+    "navy": ("🟦", "16407a", "Ko'k", "Синий", "Blue"), "purple": ("🟪", "51306f", "Binafsha", "Фиолетовый", "Purple"),
+    "orange": ("🟧", "d9822b", "To'q sariq", "Оранжевый", "Orange"), "teal": ("🩵", "0f8f8f", "Firuza", "Бирюза", "Teal"),
+    "blush": ("🌸", "f6d4da", "Och pushti", "Нежно-розовый", "Blush"),
+}
+ 
+S["uz"].update({
+    "inv_event": "🎉 <b>Qaysi tadbir uchun taklifnoma?</b>",
+    "ev_nikoh": "💍 Nikoh to'yi", "ev_tugilgan": "🎂 Tug'ilgan kun", "ev_beshik": "👶 Beshik to'y",
+    "ev_sunnat": "🕌 Sunnat to'y", "ev_yubiley": "🎊 Yubiley", "ev_boshqa": "✨ Boshqa tadbir",
+    "inv_names_other": "👤 <b>Kim uchun, qaysi ism yoki sarlavha?</b>\nMasalan: <i>Madina</i> yoki <i>Aliyevlar oilasi</i>",
+    "inv_style_photo": "🖼 Rasm orqa fonga",
+    "inv_photo_prompt": "🖼 Orqa fon uchun rasm yuboring (foto sifatida). Matn o'qilishi uchun rasm biroz qoraytiriladi.",
+    "inv_photo_bad": "Iltimos, rasm yuboring (foto yoki rasm fayli).",
+    "inv_pat": "🧩 <b>Naqsh uslubini</b> tanlang:", "pat_rand": "🎲 Tasodifiy",
+    "inv_colors": "🎨 <b>Ranglarni sozlash</b>\n\n{current}\n\nO'zgartirmoqchi bo'lgan qismni tanlang yoki davom eting.",
+    "col_none": "Hozircha hammasi tanlangan dizaynning o'z ranglarida.",
+    "col_bg": "🎨 Fon", "col_orn": "🔷 Naqsh", "col_txt": "✍️ Yozuv", "col_spk": "✨ Yulduzcha",
+    "col_done": "✅ Davom etish", "col_pick": "{elem} uchun rangni tanlang:",
+    "col_hex_btn": "✍️ HEX kod yozaman", "col_reset": "↩️ Asl rang",
+    "col_hex_prompt": "✍️ Rang kodini yuboring, masalan: <code>#d4af37</code>",
+    "col_hex_bad": "Kod noto'g'ri. Masalan: <code>#d4af37</code>",
+})
+S["ru"].update({
+    "inv_event": "🎉 <b>Для какого события приглашение?</b>",
+    "ev_nikoh": "💍 Свадьба", "ev_tugilgan": "🎂 День рождения", "ev_beshik": "👶 Бешик-той",
+    "ev_sunnat": "🕌 Суннат-той", "ev_yubiley": "🎊 Юбилей", "ev_boshqa": "✨ Другое событие",
+    "inv_names_other": "👤 <b>Для кого, какое имя или заголовок?</b>\nНапример: <i>Мадина</i> или <i>Семья Алиевых</i>",
+    "inv_style_photo": "🖼 Фото на фон",
+    "inv_photo_prompt": "🖼 Отправьте фото для фона (как фото). Для читаемости текста фото немного затемняется.",
+    "inv_photo_bad": "Пожалуйста, отправьте фото (изображение).",
+    "inv_pat": "🧩 Выберите <b>стиль узора</b>:", "pat_rand": "🎲 Случайный",
+    "inv_colors": "🎨 <b>Настройка цветов</b>\n\n{current}\n\nВыберите, что изменить, или продолжайте.",
+    "col_none": "Пока всё в цветах выбранного дизайна.",
+    "col_bg": "🎨 Фон", "col_orn": "🔷 Узор", "col_txt": "✍️ Текст", "col_spk": "✨ Звёздочки",
+    "col_done": "✅ Продолжить", "col_pick": "Выберите цвет: {elem}",
+    "col_hex_btn": "✍️ Ввести HEX-код", "col_reset": "↩️ Исходный цвет",
+    "col_hex_prompt": "✍️ Отправьте код цвета, например: <code>#d4af37</code>",
+    "col_hex_bad": "Неверный код. Например: <code>#d4af37</code>",
+})
+S["en"].update({
+    "inv_event": "🎉 <b>What event is the invitation for?</b>",
+    "ev_nikoh": "💍 Wedding", "ev_tugilgan": "🎂 Birthday", "ev_beshik": "👶 Baby cradle (beshik toy)",
+    "ev_sunnat": "🕌 Sunnat toy", "ev_yubiley": "🎊 Anniversary", "ev_boshqa": "✨ Other event",
+    "inv_names_other": "👤 <b>Who is it for — name or title?</b>\nFor example: <i>Madina</i> or <i>The Aliyev family</i>",
+    "inv_style_photo": "🖼 Photo as background",
+    "inv_photo_prompt": "🖼 Send a photo for the background (as a photo). It is slightly darkened so the text stays readable.",
+    "inv_photo_bad": "Please send a photo (an image).",
+    "inv_pat": "🧩 Choose the <b>pattern style</b>:", "pat_rand": "🎲 Random",
+    "inv_colors": "🎨 <b>Customize colors</b>\n\n{current}\n\nPick a part to change, or continue.",
+    "col_none": "Everything is in the chosen design's own colors for now.",
+    "col_bg": "🎨 Background", "col_orn": "🔷 Pattern", "col_txt": "✍️ Text", "col_spk": "✨ Sparkles",
+    "col_done": "✅ Continue", "col_pick": "Choose a color for: {elem}",
+    "col_hex_btn": "✍️ Enter HEX code", "col_reset": "↩️ Original color",
+    "col_hex_prompt": "✍️ Send a color code, for example: <code>#d4af37</code>",
+    "col_hex_bad": "Invalid code. For example: <code>#d4af37</code>",
+})
+ 
 # o'zbek kirill: lotin matnidan avtomatik hosil qilinadi
 S["uz_cyrl"] = {k: to_cyrillic(v) for k, v in S["uz"].items()}
 PALETTE_LABELS["uz_cyrl"] = {k: to_cyrillic(v) for k, v in PALETTE_LABELS["uz"].items()}
@@ -426,4 +512,15 @@ def tr(_lang, _key, /, **kw):
     base = S.get(_lang) or S["uz"]
     text = base.get(_key) or S["uz"].get(_key, _key)
     return text.format(**kw) if kw else text
+ 
+STYLE_LABELS["uz_cyrl"] = {k: to_cyrillic(v) for k, v in STYLE_LABELS["uz"].items()}
+ 
+ 
+def swatch_name(lang, key):
+    sw = COLOR_SWATCHES[key]
+    if lang == "ru":
+        return sw[3]
+    if lang == "en":
+        return sw[4]
+    return to_cyrillic(sw[2]) if lang == "uz_cyrl" else sw[2]
  
