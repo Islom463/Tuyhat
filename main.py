@@ -444,8 +444,8 @@ def _models(*names):
     return out
  
  
-TEXT_MODELS = _models(os.getenv("GROQ_MODEL", ""), "openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b")
-VISION_MODELS = _models(os.getenv("GROQ_VISION_MODEL", ""), "qwen/qwen3.6-27b", "qwen/qwen3.8-27b",
+TEXT_MODELS = _models(os.getenv("GROQ_MODEL", ""), "openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b")
+VISION_MODELS = _models(os.getenv("GROQ_VISION_MODEL", ""), "qwen/qwen3.8-27b", "qwen/qwen3.6-27b",
                         "meta-llama/llama-4-scout-17b-16e-instruct")
 _http = None
 _ai_sem = None
@@ -504,8 +504,10 @@ async def groq_chat(messages, models=None, max_tokens=1500, temperature=0.3, dea
                             break
                         last = f"{model}: HTTP {r.status} {body[:160]}"
                         logging.warning("Groq %s", last)
-                        if r.status in (401, 403):
-                            raise AIError("Groq kaliti noto'g'ri yoki ruxsat yo'q (HTTP %s)" % r.status)
+                        if r.status == 401:
+                            raise AIError("Groq kaliti noto'g'ri (HTTP 401)")
+                        if r.status in (403, 404):
+                            break                      # bu model yo'q yoki ruxsat yo'q — keyingi modelga o'tamiz
                         if r.status == 400 and use_extras and _extras(model):
                             use_extras = False          # model qo'shimcha parametrni tanimadi — qayta urinamiz
                             continue
@@ -523,6 +525,45 @@ async def groq_chat(messages, models=None, max_tokens=1500, temperature=0.3, dea
                     logging.warning("Groq %s", last)
                     break
     raise AIError(last)
+ 
+ 
+def ai_fail_text(uid, ex):
+    """Foydalanuvchiga oddiy xabar; admin bo'lsa — texnik sabab ham ko'rsatiladi."""
+    text = T(uid, "ai_fail")
+    if is_admin(uid):
+        text += f"\n\n🛠 <code>{esc(str(ex)[:350])}</code>"
+    return text
+ 
+ 
+async def diagnose_ai():
+    """/aitest uchun: matn va rasm modellarini alohida sinaydi."""
+    lines = []
+    for model in TEXT_MODELS:
+        t0 = time.monotonic()
+        try:
+            out = await groq_chat([{"role": "user", "content": "Reply with one word: OK"}], models=[model], max_tokens=200,
+                                  temperature=0, deadline=25)
+            lines.append(f"✅ matn · {model} ({time.monotonic() - t0:.1f} s): {out[:30]}")
+        except Exception as ex:
+            lines.append(f"❌ matn · {model}: {str(ex)[:170]}")
+    try:
+        from PIL import Image, ImageDraw
+        im = Image.new("RGB", (520, 140), "white")
+        ImageDraw.Draw(im).text((20, 45), "Hello world. Salom dunyo.", font=studio.font("inter_m", 34), fill="black")
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+    except Exception as ex:
+        return lines + [f"❌ test rasmini yasab bo'lmadi: {ex}"]
+    for model in VISION_MODELS:
+        t0 = time.monotonic()
+        try:
+            out = await groq_chat(_vision_msg("Read the text in this image. Reply with the text only.", b64), models=[model],
+                                  max_tokens=300, temperature=0, deadline=30)
+            lines.append(f"✅ rasm · {model} ({time.monotonic() - t0:.1f} s): {out[:40]}")
+        except Exception as ex:
+            lines.append(f"❌ rasm · {model}: {str(ex)[:170]}")
+    return lines
  
  
 def parse_json(text):
@@ -650,9 +691,9 @@ def prepare_image_b64(raw):
     from PIL import Image, ImageOps
     im = Image.open(io.BytesIO(raw))
     im = ImageOps.exif_transpose(im).convert("RGB")
-    im.thumbnail((1600, 1600))
+    im.thumbnail((1400, 1400))
     data = b""
-    for q in (85, 75, 65, 50):
+    for q in (82, 72, 62, 50):
         buf = io.BytesIO()
         im.save(buf, "JPEG", quality=q, optimize=True)
         data = buf.getvalue()
@@ -1075,7 +1116,7 @@ def palette_kb(uid):
     keys = list(studio.PALETTES)
     rows = []
     for i in range(0, len(keys), 2):
-        rows.append([btn(labels[k], f"ip:{k}") for k in keys[i:i + 2]])
+        rows.append([btn(labels.get(k, k.replace('_', ' ').title()), f"ip:{k}") for k in keys[i:i + 2]])
     return ikb(rows)
  
  
@@ -1350,7 +1391,7 @@ async def tr_text(message: types.Message, state: FSMContext):
         out = await ai_translate(text, target)
     except Exception as ex:
         logging.warning("tarjima xatosi: %s", ex)
-        return await status.edit_text(T(uid, "ai_fail"))
+        return await status.edit_text(ai_fail_text(uid, ex))
     quota_use(uid)
     try:
         await status.delete()
@@ -1374,7 +1415,7 @@ async def tr_photo(message: types.Message, state: FSMContext):
         res = await ai_vision_translate(b64, target)
     except Exception as ex:
         logging.warning("rasm tarjimasi xatosi: %s", ex)
-        return await status.edit_text(T(uid, "ai_fail"))
+        return await status.edit_text(ai_fail_text(uid, ex))
     try:
         await status.delete()
     except Exception:
@@ -1427,7 +1468,7 @@ async def gr_text(message: types.Message):
         res = await ai_grammar(text, get_lang(uid) or "uz")
     except Exception as ex:
         logging.warning("grammatika xatosi: %s", ex)
-        return await status.edit_text(T(uid, "ai_fail"))
+        return await status.edit_text(ai_fail_text(uid, ex))
     quota_use(uid)
     try:
         await status.delete()
@@ -1452,7 +1493,7 @@ async def gr_photo(message: types.Message):
         res = await ai_vision_grammar(b64, get_lang(uid) or "uz")
     except Exception as ex:
         logging.warning("rasm grammatikasi xatosi: %s", ex)
-        return await status.edit_text(T(uid, "ai_fail"))
+        return await status.edit_text(ai_fail_text(uid, ex))
     try:
         await status.delete()
     except Exception:
@@ -1545,14 +1586,9 @@ async def cmd_aitest(message: types.Message):
         return
     if not GROQ_KEY:
         return await message.answer("❌ GROQ_API_KEY topilmadi. Render → Environment ga <code>GROQ_API_KEY</code> kiriting.")
-    await message.answer(f"🔑 Kalit: <code>{GROQ_KEY[:6]}…{GROQ_KEY[-4:]}</code>\n⏳ Sinayapman...")
-    t0 = time.monotonic()
-    try:
-        out = await groq_chat([{"role": "user", "content": "Reply with one word: OK"}], max_tokens=200, temperature=0, deadline=30)
-        await message.answer(f"✅ AI ishlayapti ({time.monotonic() - t0:.1f} s). Javob: <code>{esc(out[:60])}</code>\n"
-                             f"Matn modellari: {esc(', '.join(TEXT_MODELS))}\nRasm modellari: {esc(', '.join(VISION_MODELS))}")
-    except Exception as ex:
-        await message.answer(f"❌ AI xatosi:\n<code>{esc(str(ex)[:500])}</code>")
+    await message.answer(f"🔑 Kalit: <code>{GROQ_KEY[:6]}…{GROQ_KEY[-4:]}</code>\n⏳ Matn va rasm modellarini sinayapman (30-60 s)...")
+    lines = await diagnose_ai()
+    await message.answer("<b>AI tekshiruvi</b>\n\n" + "\n".join(esc(x) for x in lines))
  
  
 @dp.callback_query(F.data == "ad:stats")
@@ -1945,3 +1981,4 @@ async def main():
  
 if __name__ == "__main__":
     asyncio.run(main())
+ 
